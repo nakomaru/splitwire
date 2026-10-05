@@ -139,33 +139,56 @@ func InstallExe() (string, error) {
 	return dst, replaceFile(dst, b)
 }
 
-// TrayExe is the file name of the tray app, built next to splitwire.exe.
-const TrayExe = "splitwire-tray.exe"
+// legacyTrayExe is the separate tray executable of earlier installs.
+const legacyTrayExe = "splitwire-tray.exe"
 
-// InstallTray copies the tray app from beside the running executable into
-// the install root. It reports an empty path when there is none to copy.
-func InstallTray() (string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	src := filepath.Join(filepath.Dir(self), TrayExe)
-	b, err := os.ReadFile(src)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
+// RemoveLegacyTray deletes the separate tray executable, or schedules it
+// for deletion at the next restart while it runs.
+func RemoveLegacyTray() {
 	bin, err := BinDir()
 	if err != nil {
-		return "", err
+		return
 	}
-	dst := filepath.Join(bin, TrayExe)
-	if strings.EqualFold(filepath.Clean(src), dst) {
-		return dst, nil
+	path := filepath.Join(bin, legacyTrayExe)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		deleteAtRestart(path)
 	}
-	return dst, replaceFile(dst, b)
+}
+
+// RemoveRoot deletes the install root. Files in use, such as the running
+// tray app, are scheduled for deletion at the next restart along with
+// their folders; it reports how many.
+func RemoveRoot() (pending int, err error) {
+	root, err := Root()
+	if err != nil {
+		return 0, err
+	}
+	if os.RemoveAll(root) == nil {
+		return 0, nil
+	}
+	var left []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil {
+			left = append(left, path)
+		}
+		return nil
+	})
+	// Children before their folders.
+	for i := len(left) - 1; i >= 0; i-- {
+		if err := deleteAtRestart(left[i]); err != nil {
+			return pending, fmt.Errorf("schedule %s for deletion: %w", left[i], err)
+		}
+		pending++
+	}
+	return pending, nil
+}
+
+func deleteAtRestart(path string) error {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	return windows.MoveFileEx(p, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
 }
 
 // replaceFile writes b to dst unless dst already holds it, moving a running

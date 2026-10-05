@@ -1,7 +1,8 @@
 # splitwire
 
-WireGuard for Windows with per-app split tunneling, with a command line
-and a notification area app. It downloads and installs everything else it
+WireGuard for Windows with per-app split tunneling, in one executable:
+double-clicked, `splitwire.exe` is a notification area app; run from a
+shell, it is a command line. It downloads and installs everything else it
 needs on first use, so the WireGuard app is not required.
 
 Any tunnel runs one of two ways:
@@ -17,8 +18,14 @@ Any tunnel runs one of two ways:
 
 ## Quick start
 
+Double-click `splitwire.exe`. It offers to set itself up, which asks for
+administrator rights once, then sits in the notification area with every
+tunnel in its menu. "Import from WireGuard app..." copies existing tunnels.
+
+From a shell:
+
 ```
-.\build.ps1                # builds splitwire.exe and splitwire-tray.exe
+.\build.ps1                # builds splitwire.exe
 splitwire import           # copy tunnels from the WireGuard app
 splitwire check home       # validate and show routes, DNS and apps
 splitwire up home          # run until Ctrl+C
@@ -41,30 +48,45 @@ imports that tunnel by itself when its file does not exist yet.
 Commands that change the system ask for administrator rights through UAC
 and continue in a new console window.
 
-## Tray app
+## Notification area app
 
-`splitwire-tray.exe` sits in the notification area. Its icon is gray when
-no tunnel runs, amber while one connects or disconnects, green when tunnels
-are up and red after a failure. The menu lists every tunnel in
-`%APPDATA%\splitwire`, each marked with how it runs (`Office - VPN`,
-`WARP - proxy 127.0.0.1:1080`). Each tunnel's submenu picks **VPN**,
-**Proxy** or **Off**, shows the last handshake and transfer, applies edits
-to a running tunnel and opens the file in Notepad. Picking VPN for one
-tunnel moves the previous VPN tunnel to Off; proxies stay up.
+Double-clicking `splitwire.exe`, or running `splitwire tray`, starts the
+notification area app. Its icon is gray when no tunnel runs, amber while
+one connects or disconnects, green when tunnels are up and red after a
+failure. The menu lists every tunnel in `%APPDATA%\splitwire`, each marked
+with how it runs (`Office - VPN`, `WARP - proxy 127.0.0.1:1080`). Each
+tunnel's submenu picks **VPN**, **Proxy** or **Off**, shows the last
+handshake and transfer, applies edits to a running tunnel and opens the
+file in Notepad. Picking VPN for one tunnel moves the previous VPN tunnel
+to Off; proxies stay up.
 
-"Reconnect at boot" brings whatever runs back up when Windows starts, and
-keeps that list current as tunnels change. The menu also disconnects
-everything, imports from the WireGuard app, shows the manager log and starts
-the tray at sign-in.
+The menu also has:
 
-The first run offers "Set up splitwire", which asks for administrator rights
-once to install the manager service (`splitwire manager install`). The
-manager runs as SYSTEM and does the privileged work; the tray runs as you
-and talks to it over the pipe `\\.\pipe\splitwire`, which only you, SYSTEM and
-Administrators can open. The tray reads your configurations and expands
-`%VARIABLES%` in `App` lines as you, so switching tunnels never prompts.
-When you edit a running tunnel's file, its submenu offers to apply the
-changes.
+- **Reconnect at boot**: bring whatever runs back up when Windows starts,
+  keeping that list current as tunnels change.
+- **Start splitwire at sign-in**: open the app when you sign in.
+- **Disconnect all**, **Import from WireGuard app...**, **Show manager log**.
+- **Uninstall splitwire...**: remove the service, the split tunnel driver
+  and `%ProgramFiles%\splitwire`; configurations in `%APPDATA%\splitwire`
+  stay. Files in use go at the next restart.
+
+The first run asks to set splitwire up. Setup copies the executable to
+`%ProgramFiles%\splitwire\bin`, installs the manager service, turns on start
+at sign-in and switches to the installed copy, so the downloaded file can
+go. Double-clicking a different `splitwire.exe` later offers to update the
+installed one; an identical copy opens the installed app.
+
+The manager service runs as SYSTEM and does the privileged work; the app
+runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
+you, SYSTEM and Administrators can open. The app reads your configurations
+and expands `%VARIABLES%` in `App` lines as you, so switching tunnels never
+prompts. When you edit a running tunnel's file, its submenu offers to apply
+the changes.
+
+The executable's manifest asks Windows 11 24H2 and later to start it
+without a console window unless a shell's console is there to share, so
+double-clicking shows no console. On earlier Windows a console window can
+flash as it starts.
 
 ## Proxies
 
@@ -100,6 +122,7 @@ tunnel, and stop while no VPN runs.
 
 | Command | Effect |
 |---|---|
+| (none), `tray` | Start the notification area app |
 | `import [--force] [name...]` | Copy tunnels from the WireGuard app; existing files stay unless `--force` |
 | `up <tunnel>` | Run a tunnel in the console until Ctrl+C |
 | `proxy <tunnel>` | Run a tunnel as a proxy in the console until Ctrl+C, without administrator rights |
@@ -109,7 +132,7 @@ tunnel, and stop while no VPN runs.
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
-| `manager install` | Install or update the manager service the tray app uses (`manager uninstall` removes it) |
+| `manager install` | Install or update the manager service the app uses (`manager uninstall` removes it) |
 | `bootstrap` | Install the components without bringing a tunnel up |
 | `cleanup` | Remove the manager, the driver service, firewall objects and `%ProgramFiles%\splitwire` |
 
@@ -143,7 +166,8 @@ Everything lives in `%ProgramFiles%\splitwire`:
   Mullvad VPN 2026.5 installer on cdn.mullvad.net with HTTP range requests,
   which downloads about 256 KiB of the 134 MB file. It runs as the
   demand-start kernel service `mullvad-split-tunnel`.
-- `bin\splitwire.exe`, `configs\`, `logs\`: for installed services. `configs`
+- `bin\splitwire.exe`, `configs\`, `logs\`: the installed app, which the
+  services run. `configs`
   and `logs` are readable only by SYSTEM and Administrators.
 
 ## How it works

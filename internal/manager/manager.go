@@ -49,11 +49,7 @@ func Install() error {
 	if err != nil {
 		return err
 	}
-	if tray, err := bootstrap.InstallTray(); err != nil {
-		return err
-	} else if tray != "" {
-		log.Printf("Installed %s", tray)
-	}
+	bootstrap.RemoveLegacyTray()
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err

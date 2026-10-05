@@ -1,5 +1,10 @@
-// Command splitwire runs WireGuard tunnels on Windows with per-app split tunneling.
+// Command splitwire runs WireGuard tunnels on Windows with per-app split
+// tunneling. Started without arguments from Explorer, it is the
+// notification area app; from a shell, it is the command line.
 package main
+
+//go:generate go run ./tools/mkicon winres/icon.ico
+//go:generate go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --arch amd64,arm64 --out rsrc
 
 import (
 	"context"
@@ -7,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -20,6 +26,7 @@ import (
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/config"
+	"splitwire/internal/console"
 	"splitwire/internal/elevate"
 	"splitwire/internal/engine"
 	"splitwire/internal/firewall"
@@ -31,15 +38,17 @@ import (
 	"splitwire/internal/service"
 	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
+	"splitwire/internal/tray"
 	"splitwire/internal/userconf"
 	"splitwire/internal/wgimport"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const usage = `splitwire ` + version + ` - WireGuard with per-app split tunneling
 
 Usage:
+  splitwire                             Open the notification area app (also by double-clicking)
   splitwire import [--force] [name...]  Copy tunnels from the WireGuard app
   splitwire up <tunnel>                 Run a tunnel in this console until Ctrl+C
   splitwire proxy <tunnel>              Run a tunnel as a local proxy in this console until Ctrl+C
@@ -51,7 +60,7 @@ Usage:
   splitwire stop <name>                 Stop an installed tunnel
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
-  splitwire manager install|uninstall   Set up or remove the service splitwire-tray uses
+  splitwire manager install|uninstall   Set up or remove the service the notification area app uses
   splitwire cleanup                     Remove services, the driver, firewall objects and files
   splitwire version
 
@@ -62,6 +71,19 @@ Commands that change the system ask for administrator rights.
 
 func main() {
 	args := os.Args[1:]
+	if len(args) == 0 {
+		switch console.Current() {
+		case console.None:
+			args = []string{tray.Command}
+		case console.Own:
+			console.Free()
+			args = []string{tray.Command}
+		}
+	}
+	if len(args) > 0 && args[0] == tray.Command {
+		runTray()
+		return
+	}
 	hold, holdOnError := false, false
 	if len(args) > 0 && args[0] == elevate.HoldFlag {
 		hold = true
@@ -69,6 +91,9 @@ func main() {
 	} else if len(args) > 0 && args[0] == elevate.HoldOnErrorFlag {
 		holdOnError = true
 		args = args[1:]
+	}
+	if hold || holdOnError {
+		console.Ensure()
 	}
 	err := run(args)
 	if err != nil {
@@ -78,6 +103,31 @@ func main() {
 		elevate.WaitForEnter()
 	}
 	if err != nil {
+		os.Exit(1)
+	}
+}
+
+// runTray runs the notification area app, detached from any shell so the
+// shell gets its prompt back.
+func runTray() {
+	if console.Current() == console.Shared {
+		self, err := os.Executable()
+		if err == nil {
+			cmd := exec.Command(self, tray.Command)
+			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS}
+			err = cmd.Start()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	console.Free()
+	if err := tray.Run(); err != nil {
+		text, _ := windows.UTF16PtrFromString("splitwire could not start:\n\n" + err.Error())
+		caption, _ := windows.UTF16PtrFromString("splitwire")
+		windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR)
 		os.Exit(1)
 	}
 }
@@ -605,10 +655,15 @@ func cleanup() error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("remove %s: %w", root, err)
+	pending, err := bootstrap.RemoveRoot()
+	if err != nil {
+		return err
 	}
-	log.Printf("Removed %s", root)
+	if pending > 0 {
+		log.Printf("Removed %s except %d files and folders in use, which go at the next restart", root, pending)
+	} else {
+		log.Printf("Removed %s", root)
+	}
 	log.Printf("The WireGuardNT driver stays installed; the WireGuard app shares it")
 	return nil
 }

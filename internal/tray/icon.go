@@ -1,9 +1,11 @@
-package main
+package tray
 
 import (
 	"bytes"
 	"encoding/binary"
+	"image"
 	"image/color"
+	"image/png"
 	"math"
 )
 
@@ -73,10 +75,26 @@ func render(size int, bg color.RGBA) []color.RGBA {
 
 // icoBytes encodes the icon in the sizes Windows asks the tray for.
 func icoBytes(bg color.RGBA) []byte {
-	sizes := []int{16, 20, 24, 32, 40, 48, 64}
+	return encodeIco(bg, []int{16, 20, 24, 32, 40, 48, 64})
+}
+
+// AppIcon is the executable's icon: the connected tray icon at the sizes
+// Explorer shows, up to 256 pixels.
+func AppIcon() []byte {
+	return encodeIco(colorUp, []int{16, 20, 24, 32, 40, 48, 64, 96, 128, 256})
+}
+
+// encodeIco encodes the icon at each size, as PNG from 48 pixels up. A
+// size of 256 is stored as 0, as the format requires.
+func encodeIco(bg color.RGBA, sizes []int) []byte {
 	var images [][]byte
 	for _, s := range sizes {
-		images = append(images, dib(s, render(s, bg)))
+		px := render(s, bg)
+		if s >= 48 {
+			images = append(images, pngImage(s, px))
+		} else {
+			images = append(images, dib(s, px))
+		}
 	}
 	var b bytes.Buffer
 	le := func(v any) { binary.Write(&b, binary.LittleEndian, v) }
@@ -98,6 +116,16 @@ func icoBytes(bg color.RGBA) []byte {
 	for _, img := range images {
 		b.Write(img)
 	}
+	return b.Bytes()
+}
+
+func pngImage(size int, px []color.RGBA) []byte {
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	for i, c := range px {
+		img.Pix[i*4], img.Pix[i*4+1], img.Pix[i*4+2], img.Pix[i*4+3] = c.R, c.G, c.B, c.A
+	}
+	var b bytes.Buffer
+	png.Encode(&b, img)
 	return b.Bytes()
 }
 

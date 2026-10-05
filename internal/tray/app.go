@@ -1,4 +1,4 @@
-package main
+package tray
 
 import (
 	"context"
@@ -13,18 +13,13 @@ import (
 
 	"fyne.io/systray"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 
-	"splitwire/internal/bootstrap"
 	"splitwire/internal/config"
-	"splitwire/internal/elevate"
 	"splitwire/internal/ipc"
 	"splitwire/internal/stats"
 	"splitwire/internal/svcwait"
 	"splitwire/internal/userconf"
 )
-
-const runKey = `Software\Microsoft\Windows\CurrentVersion\Run`
 
 // Connection states between the tray and the manager.
 const (
@@ -59,12 +54,17 @@ type app struct {
 	retry   chan struct{}
 	gen     chan struct{}
 
-	menus     map[string]*tunnelMenu
-	summaryMI *systray.MenuItem
-	downAllMI *systray.MenuItem
-	bootMI    *systray.MenuItem
-	loginMI   *systray.MenuItem
-	setupMI   *systray.MenuItem
+	setupOnce sync.Once
+	// next is the executable to start once the menu loop ends.
+	next string
+
+	menus       map[string]*tunnelMenu
+	summaryMI   *systray.MenuItem
+	downAllMI   *systray.MenuItem
+	bootMI      *systray.MenuItem
+	loginMI     *systray.MenuItem
+	setupMI     *systray.MenuItem
+	uninstallMI *systray.MenuItem
 }
 
 func newApp() *app {
@@ -157,9 +157,11 @@ func (a *app) rebuild() {
 	a.onClick(a.bootMI, gen, a.toggleBoot)
 	a.loginMI = systray.AddMenuItemCheckbox("Start splitwire at sign-in", "", runAtLogin())
 	a.onClick(a.loginMI, gen, a.toggleLogin)
-	a.setupMI = systray.AddMenuItem("Set up splitwire (administrator)...", "Install the splitwire manager service")
+	a.setupMI = systray.AddMenuItem("Set up splitwire (administrator)...", "Install splitwire and its background service")
 	a.setupMI.Hide()
 	a.onClick(a.setupMI, gen, a.setup)
+	a.uninstallMI = systray.AddMenuItem("Uninstall splitwire...", "Remove the service, the driver and Program Files\\splitwire")
+	a.onClick(a.uninstallMI, gen, a.uninstall)
 	systray.AddSeparator()
 	a.onClick(systray.AddMenuItem("Quit", "Close the tray app; running tunnels stay up"), gen, systray.Quit)
 
@@ -291,6 +293,11 @@ func (a *app) refreshLocked() {
 	} else {
 		a.setupMI.Hide()
 	}
+	if a.link == linkMissing {
+		a.uninstallMI.Hide()
+	} else {
+		a.uninstallMI.Show()
+	}
 }
 
 func (a *app) refreshTunnel(name string, m *tunnelMenu, t *ipc.Tunnel, f tunnelFile, connected bool) {
@@ -387,6 +394,7 @@ func (a *app) watchManager() {
 	for {
 		if !svcwait.Exists(ipc.ServiceName) {
 			a.setLink(linkMissing, "")
+			go a.offerSetup()
 		} else {
 			a.setLink(linkConnecting, "")
 		}
@@ -500,12 +508,6 @@ func (a *app) watchFolder() {
 
 // ---- actions ----
 
-func errorBox(format string, args ...any) {
-	text, _ := windows.UTF16PtrFromString(fmt.Sprintf(format, args...))
-	caption, _ := windows.UTF16PtrFromString("splitwire")
-	windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR|windows.MB_SETFOREGROUND)
-}
-
 // run brings the tunnel up as a VPN or a proxy. A tunnel without a Proxy
 // address gets one written to its file first.
 func (a *app) run(name, as string) {
@@ -604,82 +606,4 @@ func (a *app) showLog() {
 		return
 	}
 	exec.Command("notepad.exe", path).Start()
-}
-
-// cliExe finds splitwire.exe beside the tray app, or the installed copy.
-func cliExe() string {
-	if self, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(self), "splitwire.exe")
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	bin, _ := bootstrap.BinDir()
-	return filepath.Join(bin, "splitwire.exe")
-}
-
-// runElevated runs a CLI command elevated in a console window that stays
-// open on failure, so its error is readable there.
-func runElevated(args ...string) {
-	if _, err := elevate.RunWait(cliExe(), append([]string{elevate.HoldOnErrorFlag}, args...), true); err != nil {
-		errorBox("%v", err)
-	}
-}
-
-func (a *app) importTunnels() { runElevated("import") }
-
-func (a *app) setup() {
-	runElevated("manager", "install")
-	select {
-	case a.retry <- struct{}{}:
-	default:
-	}
-}
-
-// ---- start at sign-in ----
-
-func trayPath() string {
-	bin, err := bootstrap.BinDir()
-	if err == nil {
-		p := filepath.Join(bin, bootstrap.TrayExe)
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	self, _ := os.Executable()
-	return self
-}
-
-func runAtLogin() bool {
-	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
-	if err != nil {
-		return false
-	}
-	defer k.Close()
-	_, _, err = k.GetStringValue("splitwire")
-	return err == nil
-}
-
-func (a *app) toggleLogin() {
-	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE|registry.QUERY_VALUE)
-	if err != nil {
-		errorBox("%v", err)
-		return
-	}
-	defer k.Close()
-	if runAtLogin() {
-		err = k.DeleteValue("splitwire")
-	} else {
-		err = k.SetStringValue("splitwire", windows.EscapeArg(trayPath()))
-	}
-	if err != nil {
-		errorBox("%v", err)
-	}
-	a.mu.Lock()
-	if runAtLogin() {
-		a.loginMI.Check()
-	} else {
-		a.loginMI.Uncheck()
-	}
-	a.mu.Unlock()
 }
