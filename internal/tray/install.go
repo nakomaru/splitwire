@@ -140,6 +140,9 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 		return installPlan{}, false
 	}
 	plan := installPlan{args: []string{"manager", "install", "--wireguard-driver", "--split-tunnel-driver"}}
+	if sid, err := ownSID(); err == nil {
+		plan.args = append(plan.args, "--user="+sid)
+	}
 	for i, c := range choices {
 		switch c.key {
 		case "startMenu":
@@ -173,6 +176,16 @@ func (p installPlan) install(self string) bool {
 		errorBox("Could not change start at sign-in:\n\n%v", err)
 	}
 	return true
+}
+
+// ownSID is the SID of the user the app runs as, which stays the same when
+// the elevated install runs under another account's password.
+func ownSID() (string, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
 }
 
 // setStartMenu adds the installed app to the user's Start menu, or removes
@@ -265,11 +278,23 @@ func (a *app) install() bool {
 }
 
 func (a *app) uninstall() {
-	opts := []option{{
+	a.mu.Lock()
+	others := a.status.Users - 1
+	a.mu.Unlock()
+	var opts []option
+	if others > 0 {
+		opts = append(opts, option{
+			heading: "Other users",
+			label:   fmt.Sprintf("Keep splitwire for the %s", plural(others, "other user")),
+			detail:  "Removes only your access, Start menu shortcut and sign-in entry.",
+			checked: true,
+		})
+	}
+	opts = append(opts, option{
 		heading: "Your files",
 		label:   "Delete my tunnel configurations",
 		detail:  `%APPDATA%\splitwire, including your private keys.`,
-	}}
+	})
 	if wgimport.AppInstalled() {
 		opts = append(opts, option{
 			heading:  "Drivers",
@@ -281,7 +306,7 @@ func (a *app) uninstall() {
 		opts = append(opts, option{
 			heading: "Drivers",
 			label:   "Remove the WireGuard driver",
-			detail:  "WireGuardNT from wireguard.com.",
+			detail:  "WireGuardNT from wireguard.com, unless splitwire stays for others.",
 			checked: true,
 		})
 	}
@@ -291,16 +316,35 @@ func (a *app) uninstall() {
 	if !ok {
 		return
 	}
-	const configs, wireguardNT = 0, 1
-	args := []string{"cleanup"}
-	if states[configs] {
-		args = append(args, "--configs")
-	}
-	if !states[wireguardNT] {
-		args = append(args, "--keep-wireguardnt")
-	}
-	if !runElevated(selfExe(), args...) {
-		return
+	keep := others > 0 && states[0]
+	configs, wireguardNT := states[len(states)-2], states[len(states)-1]
+	if keep {
+		sid, err := ownSID()
+		if err != nil {
+			errorBox("%v", err)
+			return
+		}
+		if !runElevated(selfExe(), "manager", "leave", "--user="+sid) {
+			return
+		}
+		if configs {
+			if dir, err := userconf.Dir(); err == nil {
+				if err := os.RemoveAll(dir); err != nil {
+					errorBox("Could not delete your tunnel configurations:\n\n%v", err)
+				}
+			}
+		}
+	} else {
+		args := []string{"cleanup"}
+		if configs {
+			args = append(args, "--configs")
+		}
+		if !wireguardNT {
+			args = append(args, "--keep-wireguardnt")
+		}
+		if !runElevated(selfExe(), args...) {
+			return
+		}
 	}
 	setStartMenu(false)
 	setRunAtLogin(false)

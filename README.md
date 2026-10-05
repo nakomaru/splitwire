@@ -118,7 +118,7 @@ the system accent color. High contrast themes keep the system colors.
 
 The manager service runs as SYSTEM and does the privileged work; the app
 runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
-you, SYSTEM and Administrators can open. The app reads your configurations
+splitwire's users, SYSTEM and Administrators can open. The app reads your configurations
 and expands `%VARIABLES%` in `App` lines as you, so switching tunnels never
 prompts.
 
@@ -126,6 +126,20 @@ The executable's manifest asks Windows 11 24H2 and later to start it
 without a console window unless a shell's console is there to share, so
 double-clicking shows no console. On earlier Windows a console window can
 flash as it starts.
+
+## Several users
+
+Each Windows account that runs setup becomes one of splitwire's users,
+listed by SID in `%ProgramFiles%\splitwire\configs\users`, which only SYSTEM
+and Administrators can read. Setup passes the app's own account, so a
+standard user who types an administrator's password is the one added. Every
+user keeps their own tunnel files, Start menu shortcut and sign-in setting;
+the running tunnels are the PC's, so each user sees and can change them, and
+one tunnel runs as the VPN for everyone.
+
+While other users remain, the uninstall window offers to keep splitwire for
+them, which removes only your access (`splitwire manager leave`), your
+shortcut and your sign-in entry, and optionally your configurations.
 
 ## Proxies
 
@@ -172,7 +186,7 @@ tunnel, and stop while no VPN runs.
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
-| `manager install [options]` | Install or update the manager service the app uses. `--boot`/`--no-boot` sets reconnecting at boot, `--wireguard-driver` and `--split-tunnel-driver` install those drivers now, `--import` imports from the WireGuard app (`manager uninstall` removes the service) |
+| `manager install [options]` | Install or update the manager service the app uses, adding the current user, or `--user=SID`, to its users. `--boot`/`--no-boot` sets reconnecting at boot, `--wireguard-driver` and `--split-tunnel-driver` install those drivers now, `--import` imports from the WireGuard app (`manager leave [--user=SID]` removes a user again, `manager uninstall` removes the service) |
 | `bootstrap` | Install wireguard.dll, the WireGuardNT driver and the split tunnel driver without bringing a tunnel up |
 | `cleanup [--configs] [--keep-wireguardnt]` | Uninstall everything (see below); `--configs` also deletes `%APPDATA%\splitwire`, `--keep-wireguardnt` keeps the WireGuardNT driver |
 

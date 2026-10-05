@@ -54,11 +54,16 @@ type Options struct {
 	// Boot turns bringing running tunnels back up at boot on, keeping a
 	// list of boot tunnels that exists already, or off.
 	Boot Choice
+	// User is the SID of the user to allow, by default the one this
+	// process runs as. An app elevated with another account's password
+	// passes its own user here.
+	User string
 }
 
-// Install copies the executable into the install root and registers and
-// starts the manager service for the calling user. Installing again
-// updates the executable and restarts the service.
+// Install copies the executable into the install root, adds the user to
+// the users who may control the manager, and registers and starts the
+// manager service. Installing again updates the executable and restarts
+// the service.
 func Install(opts Options) error {
 	if n, err := bootstrap.CancelPendingDeletes(); err != nil {
 		log.Printf("Warning: cancel deletions left by an uninstall: %v", err)
@@ -91,11 +96,14 @@ func Install(opts Options) error {
 			os.Remove(path)
 		}
 	}
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
+	if opts.User == "" {
+		if opts.User, err = CurrentUser(); err != nil {
+			return err
+		}
+	}
+	if err := addUser(opts.User); err != nil {
 		return err
 	}
-	sid := user.User.Sid.String()
 
 	m, err := mgr.Connect()
 	if err != nil {
@@ -108,7 +116,7 @@ func Install(opts Options) error {
 		ErrorControl: mgr.ErrorNormal,
 		Dependencies: []string{"Nsi", "TcpIp"},
 		DisplayName:  "splitwire manager",
-		Description:  "Runs splitwire tunnels for the splitwire tray app.",
+		Description:  "Runs splitwire tunnels for the splitwire app.",
 		SidType:      windows.SERVICE_SID_TYPE_UNRESTRICTED,
 	}
 	s, err := m.OpenService(ServiceName)
@@ -118,13 +126,13 @@ func Install(opts Options) error {
 			s.Close()
 			return err
 		}
-		cfg.BinaryPathName = windows.EscapeArg(exe) + " " + RunCommand + " " + sid
+		cfg.BinaryPathName = windows.EscapeArg(exe) + " " + RunCommand
 		if err := s.UpdateConfig(cfg); err != nil {
 			s.Close()
 			return fmt.Errorf("update %s service: %w", ServiceName, err)
 		}
 	} else {
-		s, err = m.CreateService(ServiceName, exe, cfg, RunCommand, sid)
+		s, err = m.CreateService(ServiceName, exe, cfg, RunCommand)
 		if err != nil {
 			return fmt.Errorf("create %s service: %w", ServiceName, err)
 		}
@@ -185,7 +193,7 @@ func Uninstall() error {
 		return err
 	}
 	if dir, err := bootstrap.ConfigsDir(); err == nil {
-		for _, f := range []string{bootFile, legacyBootName, legacyBootConf} {
+		for _, f := range []string{bootFile, usersFile, legacyBootName, legacyBootConf} {
 			os.Remove(filepath.Join(dir, f))
 		}
 	}

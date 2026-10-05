@@ -68,8 +68,9 @@ Usage:
                                         --boot or --no-boot turns reconnecting tunnels at boot on
                                         or off, --wireguard-driver and
                                         --split-tunnel-driver install those drivers now, --import
-                                        imports from the WireGuard app; "manager uninstall"
-                                        removes the service
+                                        imports from the WireGuard app, --user=SID allows that
+                                        user instead of the current one; "manager leave" removes
+                                        a user again, "manager uninstall" removes the service
   splitwire cleanup [options]           Uninstall everything; --configs also deletes your tunnel
                                         files, --keep-wireguardnt keeps the WireGuardNT driver
   splitwire version
@@ -145,18 +146,35 @@ func runTray(args []string) {
 
 // Flags of manager install and cleanup.
 var (
-	installFlags = []string{"--boot", "--no-boot", "--wireguard-driver", "--split-tunnel-driver", "--import"}
+	installFlags = []string{"--boot", "--no-boot", "--wireguard-driver", "--split-tunnel-driver", "--import", "--user="}
 	cleanupFlags = []string{"--configs", "--keep-wireguardnt"}
 )
 
-// onlyFlags reports whether every argument is one of allowed.
+// onlyFlags reports whether every argument is one of allowed. An allowed
+// flag ending in = takes a value after it.
 func onlyFlags(args []string, allowed ...string) bool {
 	for _, a := range args {
-		if !hasFlag(allowed, a) {
+		known := false
+		for _, f := range allowed {
+			if a == f || (strings.HasSuffix(f, "=") && strings.HasPrefix(a, f)) {
+				known = true
+			}
+		}
+		if !known {
 			return false
 		}
 	}
 	return true
+}
+
+// flagValue is the value of the flag prefix, such as --user=, or "".
+func flagValue(args []string, prefix string) string {
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, prefix); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // choice reads a pair of opposite flags.
@@ -235,10 +253,11 @@ func run(args []string) error {
 		return service.Run(args[1])
 	}
 	if args[0] == manager.RunCommand {
-		if len(args) != 2 {
-			return errors.New("manager-run needs the user SID")
+		legacyUser := ""
+		if len(args) > 1 {
+			legacyUser = args[1]
 		}
-		return manager.Run(args[1])
+		return manager.Run(legacyUser)
 	}
 	if args[0] == wgimport.HelperCommand {
 		if len(args) < 3 {
@@ -306,9 +325,21 @@ func run(args []string) error {
 			return err
 		}
 	case "manager":
-		if len(args) < 2 || (args[1] != "install" && args[1] != "uninstall") ||
-			(args[1] == "uninstall" && len(args) > 2) || !onlyFlags(args[2:], installFlags...) {
-			return errors.New("usage: splitwire manager install [" + strings.Join(installFlags, "] [") + "] | uninstall")
+		ok := len(args) >= 2
+		if ok {
+			switch args[1] {
+			case "install":
+				ok = onlyFlags(args[2:], installFlags...)
+			case "leave":
+				ok = onlyFlags(args[2:], "--user=")
+			case "uninstall":
+				ok = len(args) == 2
+			default:
+				ok = false
+			}
+		}
+		if !ok {
+			return errors.New("usage: splitwire manager install [" + strings.Join(installFlags, "] [") + "] | leave [--user=SID] | uninstall")
 		}
 	case "cleanup":
 		if !onlyFlags(args[1:], cleanupFlags...) {
@@ -350,6 +381,7 @@ func run(args []string) error {
 			flags := args[2:]
 			err := manager.Install(manager.Options{
 				Boot: choice(flags, "--boot", "--no-boot"),
+				User: flagValue(flags, "--user="),
 			})
 			if err != nil {
 				return err
@@ -373,6 +405,16 @@ func run(args []string) error {
 				}
 			}
 			return nil
+		}
+		if args[1] == "leave" {
+			user := flagValue(args[2:], "--user=")
+			if user == "" {
+				var err error
+				if user, err = manager.CurrentUser(); err != nil {
+					return err
+				}
+			}
+			return manager.Leave(user)
 		}
 		return manager.Uninstall()
 	case "bootstrap":

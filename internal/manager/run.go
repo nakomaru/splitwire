@@ -54,15 +54,21 @@ type manager struct {
 	mu       sync.Mutex
 	status   ipc.Status
 	watchers map[chan ipc.Status]struct{}
+
+	// lnMu guards ln, the pipe listener, which reloadUsers replaces.
+	lnMu sync.Mutex
+	ln   net.Listener
 }
 
 type service struct {
-	userSID string
+	// legacyUser is the user an install that predates the users file
+	// passed on the command line; it joins the users.
+	legacyUser string
 }
 
 // Run executes the manager service.
-func Run(userSID string) error {
-	return svc.Run(ServiceName, &service{userSID: userSID})
+func Run(legacyUser string) error {
+	return svc.Run(ServiceName, &service{legacyUser: legacyUser})
 }
 
 func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
@@ -78,11 +84,19 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 			defer f.Close()
 		}
 	}
-	ln, err := ipc.Listen(s.userSID)
+	if s.legacyUser != "" {
+		if err := addUser(s.legacyUser); err != nil {
+			log.Printf("Warning: %v", err)
+		}
+	}
+	users := Users()
+	m.status.Users = len(users)
+	ln, err := ipc.Listen(users)
 	if err != nil {
 		log.Printf("Error: listen on %s: %v", ipc.PipeName, err)
 		return true, 1
 	}
+	m.ln = ln
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	log.Printf("Manager started")
 
@@ -103,7 +117,9 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 		switch req.Cmd {
 		case svc.Stop, svc.Shutdown:
 			changes <- svc.Status{State: svc.StopPending}
-			ln.Close()
+			m.lnMu.Lock()
+			m.ln.Close()
+			m.lnMu.Unlock()
 			close(stop)
 			m.down("")
 			log.Printf("Manager stopped")
@@ -113,6 +129,25 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 		}
 	}
 	return false, 0
+}
+
+// reloadUsers reopens the pipe for the users in the users file. Open
+// connections stay; new ones need the new access list.
+func (m *manager) reloadUsers() error {
+	users := Users()
+	m.lnMu.Lock()
+	defer m.lnMu.Unlock()
+	// The pipe takes one listener at a time, so the old one closes first.
+	m.ln.Close()
+	ln, err := ipc.Listen(users)
+	if err != nil {
+		return fmt.Errorf("reopen %s: %w", ipc.PipeName, err)
+	}
+	m.ln = ln
+	go m.serve(ln)
+	m.publish(func(s *ipc.Status) { s.Users = len(users) })
+	log.Printf("Users reloaded: %d may connect", len(users))
+	return nil
 }
 
 func (m *manager) serve(ln net.Listener) {
@@ -150,6 +185,10 @@ func (m *manager) handle(c *ipc.Conn) {
 			}
 		case ipc.OpLog:
 			rep.Log = m.ring.Lines()
+		case ipc.OpUsers:
+			if err := m.reloadUsers(); err != nil {
+				rep.Error = err.Error()
+			}
 		case ipc.OpWatch:
 			m.watch(c)
 			return

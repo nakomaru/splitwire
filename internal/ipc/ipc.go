@@ -31,6 +31,7 @@ const (
 	OpWatch  = "watch"  // stream a Status on every change and periodically while tunnels run
 	OpBoot   = "boot"   // Boot: bring the running tunnels back up when Windows starts
 	OpLog    = "log"    // reply with recent manager log lines
+	OpUsers  = "users"  // reread the users who may connect and reopen the pipe for them
 )
 
 // Ways a tunnel runs.
@@ -86,6 +87,8 @@ type Status struct {
 	Tunnels []Tunnel `json:",omitempty"`
 	// Boot reports that the running tunnels come back up at boot.
 	Boot bool `json:",omitempty"`
+	// Users counts the users who may control the manager.
+	Users int `json:",omitempty"`
 }
 
 // Find returns the named tunnel, or nil.
@@ -178,11 +181,12 @@ func Call(ctx context.Context, req Request) (*Reply, error) {
 	return c.Call(req)
 }
 
-// Listen opens the manager's pipe for SYSTEM, Administrators and the given user.
-func Listen(userSID string) (net.Listener, error) {
+// Listen opens the manager's pipe for SYSTEM, Administrators and the
+// given users.
+func Listen(userSIDs []string) (net.Listener, error) {
 	sddl := "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
-	if userSID != "" {
-		sddl += "(A;;GRGW;;;" + userSID + ")"
+	for _, sid := range userSIDs {
+		sddl += "(A;;GRGW;;;" + sid + ")"
 	}
 	return winio.ListenPipe(PipeName, &winio.PipeConfig{
 		SecurityDescriptor: sddl,
