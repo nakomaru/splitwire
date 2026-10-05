@@ -26,6 +26,8 @@ import (
 	"splitwire/internal/netcfg"
 	"splitwire/internal/service"
 	"splitwire/internal/stdriver"
+	"splitwire/internal/userconf"
+	"splitwire/internal/wgimport"
 )
 
 const version = "0.1.0"
@@ -33,18 +35,21 @@ const version = "0.1.0"
 const usage = `splitwire ` + version + ` - WireGuard with per-app split tunneling
 
 Usage:
-  splitwire up <tunnel.conf>        Run a tunnel in this console until Ctrl+C
-  splitwire check <tunnel.conf>     Validate a configuration and show its effect
-  splitwire apps [filter]           List running programs with their paths
-  splitwire install <tunnel.conf>   Install a tunnel as a service that starts at boot
-  splitwire uninstall <name>        Stop and remove an installed tunnel
-  splitwire start <name>            Start an installed tunnel
-  splitwire stop <name>             Stop an installed tunnel
-  splitwire status [name]           Show installed tunnels, the driver and peer statistics
-  splitwire bootstrap               Install wireguard.dll and the split tunnel driver
-  splitwire cleanup                 Remove the driver service, firewall objects and files
+  splitwire import [--force] [name...]  Copy tunnels from the WireGuard app
+  splitwire up <tunnel>                 Run a tunnel in this console until Ctrl+C
+  splitwire check <tunnel>              Validate a configuration and show its effect
+  splitwire apps [filter]               List running programs with their paths
+  splitwire install <tunnel>            Install a tunnel as a service that starts at boot
+  splitwire uninstall <name>            Stop and remove an installed tunnel
+  splitwire start <name>                Start an installed tunnel
+  splitwire stop <name>                 Stop an installed tunnel
+  splitwire status [name]               Show tunnels, the driver and peer statistics
+  splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
+  splitwire cleanup                     Remove the driver service, firewall objects and files
   splitwire version
 
+A <tunnel> is a name, for %APPDATA%\splitwire\<name>.conf, or a path to a .conf file.
+"up" imports a named tunnel from the WireGuard app when the file does not exist yet.
 Commands that change the system ask for administrator rights.
 `
 
@@ -84,14 +89,31 @@ func requireAdmin(args []string) (bool, error) {
 	return true, elevate.Relaunch(args, true)
 }
 
+// absArg resolves a tunnel argument to its configuration path, so an
+// elevated relaunch finds the same file.
 func absArg(args []string) []string {
 	out := append([]string(nil), args...)
-	if len(out) == 2 {
-		if p, err := filepath.Abs(out[1]); err == nil {
+	if len(out) == 2 && userconf.IsPath(out[1]) {
+		if p, err := userconf.Resolve(out[1]); err == nil {
 			out[1] = p
 		}
 	}
 	return out
+}
+
+// existingConf resolves a tunnel argument to a configuration file that exists.
+func existingConf(arg string) (string, error) {
+	path, err := userconf.Resolve(arg)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) && !userconf.IsPath(arg) {
+			return "", fmt.Errorf("no configuration %s; run `splitwire import %s` to copy it from the WireGuard app", path, arg)
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 func run(args []string) error {
@@ -105,6 +127,12 @@ func run(args []string) error {
 		}
 		return service.Run(args[1])
 	}
+	if args[0] == wgimport.HelperCommand {
+		if len(args) < 3 {
+			return errors.New("helper needs an output folder and tunnel names")
+		}
+		return wgimport.RunHelper(args[1], args[2:])
+	}
 	if _, err := logx.Setup(""); err != nil {
 		return err
 	}
@@ -117,7 +145,11 @@ func run(args []string) error {
 		fmt.Print(usage)
 		return nil
 	case "check":
-		path, err := needArg(args, "<tunnel.conf>")
+		arg, err := needArg(args, "<tunnel>")
+		if err != nil {
+			return err
+		}
+		path, err := existingConf(arg)
 		if err != nil {
 			return err
 		}
@@ -132,10 +164,11 @@ func run(args []string) error {
 
 	switch args[0] {
 	case "up", "install":
-		if _, err := needArg(args, "<tunnel.conf>"); err != nil {
+		if _, err := needArg(args, "<tunnel>"); err != nil {
 			return err
 		}
 		args = absArg(args)
+	case "import":
 	case "uninstall", "start", "stop":
 		if _, err := needArg(args, "<name>"); err != nil {
 			return err
@@ -149,10 +182,16 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "import":
+		return importTunnels(args[1:])
 	case "up":
 		return up(args[1])
 	case "install":
-		return service.Install(args[1])
+		path, err := existingConf(args[1])
+		if err != nil {
+			return err
+		}
+		return service.Install(path)
 	case "uninstall":
 		return service.Uninstall(args[1])
 	case "start":
@@ -173,7 +212,47 @@ func run(args []string) error {
 	return nil
 }
 
-func up(path string) error {
+func importTunnels(args []string) error {
+	force := false
+	var names []string
+	for _, a := range args {
+		switch {
+		case a == "--force" || a == "-f":
+			force = true
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("unknown option %s", a)
+		default:
+			names = append(names, a)
+		}
+	}
+	res, err := wgimport.Import(names, force)
+	dir, _ := userconf.Dir()
+	for _, n := range res.Imported {
+		log.Printf("Imported %s to %s", n, filepath.Join(dir, n+".conf"))
+	}
+	for _, n := range res.Skipped {
+		log.Printf("Skipped %s: %s already exists (--force overwrites it)", n, filepath.Join(dir, n+".conf"))
+	}
+	if err != nil {
+		return err
+	}
+	if len(res.Imported) > 0 {
+		log.Printf("Each imported file ends with a commented [Splitwire] section to edit")
+	}
+	return nil
+}
+
+func up(arg string) error {
+	path, err := userconf.Resolve(arg)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) && !userconf.IsPath(arg) {
+		log.Printf("%s does not exist; importing %s from the WireGuard app", path, arg)
+		if _, err := wgimport.Import([]string{arg}, false); err != nil {
+			return err
+		}
+	}
 	c, err := config.Load(path)
 	if err != nil {
 		return err
@@ -294,6 +373,17 @@ func apps(filter string) error {
 }
 
 func status(name string) error {
+	if dir, err := userconf.Dir(); err == nil {
+		names, err := userconf.Names()
+		if err != nil {
+			return err
+		}
+		if len(names) == 0 {
+			fmt.Printf("No tunnels in %s; `splitwire import` copies them from the WireGuard app.\n", dir)
+		} else {
+			fmt.Printf("Tunnels in %s: %s\n", dir, strings.Join(names, ", "))
+		}
+	}
 	installed, err := service.List()
 	if err != nil {
 		return err

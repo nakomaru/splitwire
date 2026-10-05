@@ -277,8 +277,9 @@ func (t *Tunnel) engageDriver(devicePaths []string) error {
 	first := true
 	t.physical, err = netcfg.WatchPhysical(t.luid, func(p netcfg.Physical) {
 		a := driverAddresses(c.Mode, wg4, wg6, p)
-		log.Printf("Physical addresses %v %v; driver tunnel %v %v, internet %v %v",
-			p.IPv4, p.IPv6, a.TunnelIPv4, a.TunnelIPv6, a.InternetIPv4, a.InternetIPv6)
+		log.Printf("Physical addresses %s %s; driver tunnel %s %s, internet %s %s",
+			addrText(p.IPv4), addrText(p.IPv6), addrText(a.TunnelIPv4), addrText(a.TunnelIPv6),
+			addrText(a.InternetIPv4), addrText(a.InternetIPv6))
 		err := drv.RegisterAddresses(a)
 		if err != nil {
 			log.Printf("Warning: %v", err)
@@ -386,4 +387,11 @@ func (t *Tunnel) Down() {
 		windows.CloseHandle(t.mutex)
 		t.mutex = 0
 	}
+}
+
+func addrText(a netip.Addr) string {
+	if !a.IsValid() {
+		return "none"
+	}
+	return a.String()
 }

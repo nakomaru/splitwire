@@ -11,15 +11,23 @@ downloads and installs everything else it needs on first use.
 
 ```
 go build -o splitwire.exe .
-splitwire check home.conf     # validate and show routes, DNS and apps
-splitwire up home.conf        # run until Ctrl+C
-splitwire install home.conf   # or run as a service that starts at boot
+splitwire import           # copy tunnels from the WireGuard app
+splitwire check home       # validate and show routes, DNS and apps
+splitwire up home          # run until Ctrl+C
+splitwire install home     # or run as a service that starts at boot
 ```
 
-A configuration is an ordinary WireGuard `.conf` plus an optional `[Splitwire]`
-section; see [example.conf](example.conf). The tunnel takes its name from
-the file name. `splitwire apps firefox` lists running programs whose paths
-contain "firefox", for filling in `App` lines.
+Configurations live in `%APPDATA%\splitwire\<name>.conf`; commands take the
+name, or a path to a `.conf` anywhere else. A configuration is an ordinary
+WireGuard `.conf` plus an optional `[Splitwire]` section; see
+[example.conf](example.conf). `splitwire apps firefox` lists running
+programs whose paths contain "firefox", for filling in `App` lines.
+
+`import` copies tunnels out of the WireGuard app. The app keeps them
+encrypted for the SYSTEM account, so splitwire decrypts them through a
+temporary service that runs as SYSTEM and deletes itself afterward. Each
+imported file ends with a commented `[Splitwire]` section. `up <name>`
+imports that tunnel by itself when its file does not exist yet.
 
 Commands that change the system ask for administrator rights through UAC
 and continue in a new console window.
@@ -28,13 +36,14 @@ and continue in a new console window.
 
 | Command | Effect |
 |---|---|
-| `up <conf>` | Run a tunnel in the console until Ctrl+C |
-| `check <conf>` | Parse a configuration and print its routes, DNS, kill switch and apps |
+| `import [--force] [name...]` | Copy tunnels from the WireGuard app; existing files stay unless `--force` |
+| `up <tunnel>` | Run a tunnel in the console until Ctrl+C |
+| `check <tunnel>` | Parse a configuration and print its routes, DNS, kill switch and apps |
 | `apps [filter]` | List running programs with their full paths |
-| `install <conf>` | Copy the configuration and executable into `%ProgramFiles%\splitwire` and register an auto-start service `splitwire$<name>` |
+| `install <tunnel>` | Copy the configuration and executable into `%ProgramFiles%\splitwire` and register an auto-start service `splitwire$<name>` |
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
-| `status [name]` | Installed tunnels, peer handshakes and transfer, driver state |
+| `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
 | `bootstrap` | Install the components without bringing a tunnel up |
 | `cleanup` | Remove the driver service, firewall objects and `%ProgramFiles%\splitwire` |
 

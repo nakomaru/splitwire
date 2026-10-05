@@ -3,11 +3,13 @@
 package bootstrap
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -65,7 +67,7 @@ func EnsureDirs() error {
 			return err
 		}
 		if d.restricted {
-			if err := restrict(p); err != nil {
+			if err := Restrict(p); err != nil {
 				return fmt.Errorf("restrict %s: %w", p, err)
 			}
 		}
@@ -73,7 +75,8 @@ func EnsureDirs() error {
 	return nil
 }
 
-func restrict(path string) error {
+// Restrict limits path to SYSTEM and Administrators.
+func Restrict(path string) error {
 	sd, err := windows.SecurityDescriptorFromString(adminOnlySDDL)
 	if err != nil {
 		return err
@@ -111,4 +114,40 @@ func writeVerified(path string, b []byte, wantSHA256 string) error {
 		return err
 	}
 	return nil
+}
+
+// InstallExe copies the running executable into the install root, so the
+// service never runs from a user-writable location. A running copy is moved
+// aside, which Windows permits for executables in use.
+func InstallExe() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	bin, err := BinDir()
+	if err != nil {
+		return "", err
+	}
+	dst := filepath.Join(bin, "splitwire.exe")
+	if strings.EqualFold(filepath.Clean(self), dst) {
+		return dst, nil
+	}
+	b, err := os.ReadFile(self)
+	if err != nil {
+		return "", err
+	}
+	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) {
+		return dst, nil
+	}
+	if _, err := os.Stat(dst); err == nil {
+		aside := dst + ".old"
+		os.Remove(aside)
+		if err := os.Rename(dst, aside); err != nil {
+			return "", fmt.Errorf("move aside %s: %w", dst, err)
+		}
+	}
+	if err := os.WriteFile(dst, b, 0o755); err != nil {
+		return "", err
+	}
+	return dst, nil
 }

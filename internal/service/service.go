@@ -2,7 +2,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -31,42 +30,6 @@ const RunCommand = "service-run"
 // Name is the service name of a tunnel.
 func Name(tunnel string) string { return Prefix + tunnel }
 
-// installExe copies the running executable into the install root, so the
-// service never runs from a user-writable location. A running copy is moved
-// aside, which Windows permits for executables in use.
-func installExe() (string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	bin, err := bootstrap.BinDir()
-	if err != nil {
-		return "", err
-	}
-	dst := filepath.Join(bin, "splitwire.exe")
-	if strings.EqualFold(filepath.Clean(self), dst) {
-		return dst, nil
-	}
-	b, err := os.ReadFile(self)
-	if err != nil {
-		return "", err
-	}
-	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) {
-		return dst, nil
-	}
-	if _, err := os.Stat(dst); err == nil {
-		aside := dst + ".old"
-		os.Remove(aside)
-		if err := os.Rename(dst, aside); err != nil {
-			return "", fmt.Errorf("move aside %s: %w", dst, err)
-		}
-	}
-	if err := os.WriteFile(dst, b, 0o755); err != nil {
-		return "", err
-	}
-	return dst, nil
-}
-
 // Install copies the configuration into the install root, with App entries
 // expanded for the installing user, and registers and starts an
 // auto-start service for it.
@@ -82,7 +45,7 @@ func Install(confPath string) error {
 	if err := bootstrap.EnsureDirs(); err != nil {
 		return err
 	}
-	exe, err := installExe()
+	exe, err := bootstrap.InstallExe()
 	if err != nil {
 		return err
 	}
