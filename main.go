@@ -42,6 +42,7 @@ import (
 	"splitwire/internal/stdriver"
 	"splitwire/internal/tray"
 	"splitwire/internal/userconf"
+	"splitwire/internal/warp"
 	"splitwire/internal/wgimport"
 )
 
@@ -54,6 +55,7 @@ Usage:
   splitwire import [--force] [name...]  Copy tunnels from the WireGuard app
   splitwire up <tunnel>                 Run a tunnel in this console until Ctrl+C
   splitwire proxy <tunnel>              Run a tunnel as a local proxy in this console until Ctrl+C
+  splitwire warp [name]                 Register a free Cloudflare WARP device as a new tunnel
   splitwire check <tunnel>              Validate a configuration and show its effect
   splitwire apps [filter]               List running programs with their paths
   splitwire install <tunnel>            Install a tunnel as a service that starts at boot
@@ -265,6 +267,15 @@ func run(args []string) error {
 			return err
 		}
 		return check(path)
+	case "warp":
+		if len(args) > 2 {
+			return errors.New("usage: splitwire warp [name]")
+		}
+		name := "WARP"
+		if len(args) == 2 {
+			name = args[1]
+		}
+		return createWARP(name)
 	case "proxy":
 		arg, err := needArg(args, "<tunnel>")
 		if err != nil {
@@ -421,6 +432,25 @@ func up(arg string) error {
 	defer cancel()
 	log.Printf("Starting tunnel %s; press Ctrl+C to stop", c.WG.Name)
 	return engine.Run(ctx, c)
+}
+
+// createWARP registers a Cloudflare WARP device and saves it as a tunnel
+// named name, or name-2 and so on when that is taken.
+func createWARP(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d, err := warp.Register(ctx)
+	if err != nil {
+		return err
+	}
+	saved, err := userconf.CreateNew(name, d.Config())
+	if err != nil {
+		warp.Delete(ctx, d.ID, d.Token)
+		return err
+	}
+	dir, _ := userconf.Dir()
+	log.Printf("Created %s (Cloudflare WARP, %s account) in %s", saved, d.AccountType, dir)
+	return nil
 }
 
 func runProxy(path string) error {

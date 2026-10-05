@@ -61,6 +61,10 @@ func bootOn() bool {
 	return err == nil && rep.Status != nil && rep.Status.Boot
 }
 
+// driversNote credits the drivers every install puts in place.
+const driversNote = "Also installs the WireGuard driver (WireGuardNT, wireguard.com) and " +
+	"Mullvad's open source split tunnel driver (mullvad.net)."
+
 // installPlan is what the install window decided.
 type installPlan struct {
 	args       []string // manager install arguments
@@ -102,24 +106,6 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 			checked: true,
 		}, key: "delete"})
 	}
-	heading := "Drivers"
-	if !bootstrap.WireGuardNTInstalled() {
-		choices = append(choices, choice{option: option{
-			heading: heading,
-			label:   "Install the WireGuard driver now",
-			detail:  "WireGuardNT from wireguard.com, which runs VPN tunnels.",
-			checked: true,
-		}, on: "--wireguard-driver"})
-		heading = ""
-	}
-	if !bootstrap.SplitDriverInstalled() {
-		choices = append(choices, choice{option: option{
-			heading: heading,
-			label:   "Install the split tunnel driver now",
-			detail:  "Mullvad's open source driver from mullvad.net, for per-app tunnels.",
-			checked: true,
-		}, on: "--split-tunnel-driver"})
-	}
 	choices = append(choices,
 		choice{option: option{
 			heading: "Startup",
@@ -136,11 +122,14 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 
 	title, button := "Install splitwire", "Install"
 	intro := "Installs splitwire into Program Files with a background service, so tunnels " +
-		"connect without prompts."
+		"connect without prompts.\n\n" + driversNote
 	if updating {
 		title, button = "Update splitwire", "Update"
 		intro = fmt.Sprintf("Updates splitwire from version %s to %s. Running tunnels reconnect.",
 			installedVersion(installed), Version)
+		if !bootstrap.WireGuardNTInstalled() || !bootstrap.SplitDriverInstalled() {
+			intro += "\n\n" + driversNote
+		}
 	}
 	opts := make([]option, len(choices))
 	for i, c := range choices {
@@ -150,7 +139,7 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 	if !ok {
 		return installPlan{}, false
 	}
-	plan := installPlan{args: []string{"manager", "install"}}
+	plan := installPlan{args: []string{"manager", "install", "--wireguard-driver", "--split-tunnel-driver"}}
 	for i, c := range choices {
 		switch c.key {
 		case "startMenu":

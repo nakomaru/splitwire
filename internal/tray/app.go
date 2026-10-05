@@ -18,6 +18,7 @@ import (
 	"splitwire/internal/ipc"
 	"splitwire/internal/svcwait"
 	"splitwire/internal/userconf"
+	"splitwire/internal/warp"
 )
 
 // Connection states between the tray and the manager.
@@ -347,6 +348,31 @@ func (a *app) changePort(name string) {
 	if proxied {
 		a.connect(name, ipc.AsProxy)
 	}
+}
+
+// createWARP registers a Cloudflare WARP device and saves it as a tunnel,
+// which the folder watcher then adds to the menu.
+func (a *app) createWARP() {
+	if _, ok := askOptions("Create WARP tunnel",
+		"Registers a free device with Cloudflare WARP and saves it as a tunnel. It uses the "+
+			"registration of Cloudflare's own app, which is unofficial and could change.",
+		nil, "Create"); !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d, err := warp.Register(ctx)
+	if err != nil {
+		errorBox("Could not create a WARP tunnel:\n\n%v", err)
+		return
+	}
+	name, err := userconf.CreateNew("WARP", d.Config())
+	if err != nil {
+		warp.Delete(ctx, d.ID, d.Token)
+		errorBox("Could not save the WARP tunnel:\n\n%v", err)
+		return
+	}
+	infoBox("Created the tunnel %s. Pick it under VPN or Proxies.", name)
 }
 
 func (a *app) copyAddress(name string) {

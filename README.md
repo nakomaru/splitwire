@@ -88,20 +88,17 @@ Show manager log, Uninstall splitwire..., Quit
   below, and asks whether to delete your tunnel configurations too.
 
 The first run opens the install window: checkboxes with descriptions, grouped
-under Install, Drivers and Startup, and an Install button that asks for administrator rights
-once.
+under Install and Startup, and an Install button that asks for administrator
+rights once. Every install also puts in place the WireGuard driver
+(WireGuardNT from the WireGuard project; wireguard.dll installs it with its
+first adapter, so setup creates a temporary one) and Mullvad's open source
+split tunnel driver, and the window says so.
 
 - **Add splitwire to the Start menu**: your own Start menu; only the installing
   user can control the service, so other accounts get no shortcut.
 - **Start splitwire at sign-in**.
 - **Reconnect tunnels at boot**: the menu changes it later too.
-- **Install the WireGuard driver now**, while it is not installed:
-  WireGuardNT from the WireGuard project, which runs VPN tunnels. wireguard.dll
-  installs it with its first adapter, so setup creates a temporary one.
-- **Install the split tunnel driver now**, while it is not installed:
-  Mullvad's open source driver, for per-app tunnels.
 
-Drivers left out install when a tunnel first needs them.
 - **Import tunnels from the WireGuard app**, when that app is installed (on
   while `%APPDATA%\splitwire` holds no tunnels).
 - **Delete this file afterward**, when run from outside Program Files: the
@@ -168,6 +165,7 @@ tunnel, and stop while no VPN runs.
 | (none), `tray` | Start the notification area app |
 | `import [--force] [name...]` | Copy tunnels from the WireGuard app; existing files stay unless `--force` |
 | `up <tunnel>` | Run a tunnel in the console until Ctrl+C |
+| `warp [name]` | Register a free Cloudflare WARP device and save it as a tunnel, `WARP` by default |
 | `proxy <tunnel>` | Run a tunnel as a proxy in the console until Ctrl+C, without administrator rights |
 | `check <tunnel>` | Parse a configuration and print its routes, DNS, kill switch and apps |
 | `apps [filter]` | List running programs with their full paths |
@@ -214,6 +212,17 @@ Everything lives in `%ProgramFiles%\splitwire`:
 - `bin\splitwire.exe`, `configs\`, `logs\`: the installed app, which the
   services run, and the services' configuration copies and logs. `configs`
   and `logs` are readable only by SYSTEM and Administrators.
+
+## WARP tunnels
+
+**Configure > Create WARP tunnel...**, or `splitwire warp`, registers a free
+device with Cloudflare WARP and saves it as a tunnel named `WARP` (or
+`WARP-2` and so on). It speaks the registration API of Cloudflare's WARP
+app, which Cloudflare does not document and could change; wgcf and similar
+tools use the same requests. The file's first comments record the device ID
+and its token, which removing the device from Cloudflare needs. A WARP
+tunnel works as a VPN or as a proxy, and as a proxy inside a full VPN
+tunnel it makes a double hop.
 
 ## Uninstalling
 

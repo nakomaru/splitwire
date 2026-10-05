@@ -90,6 +90,7 @@ func (a *app) rebuild() {
 	configMI.AddSeparator()
 	a.onClick(configMI.AddSubMenuItem("Open configuration folder", ""), gen, a.openFolder)
 	a.onClick(configMI.AddSubMenuItem("Import from WireGuard app...", "Copy tunnels from the WireGuard app (asks for administrator rights)"), gen, a.importTunnels)
+	a.onClick(configMI.AddSubMenuItem("Create WARP tunnel...", "Register a free Cloudflare WARP device as a new tunnel"), gen, a.createWARP)
 	systray.AddSeparator()
 
 	a.downAllMI = systray.AddMenuItem("Disconnect all", "")

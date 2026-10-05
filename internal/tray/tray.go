@@ -192,6 +192,12 @@ func startTray(exe string, args ...string) error {
 
 // ---- dialogs ----
 
+func infoBox(format string, args ...any) {
+	text, _ := windows.UTF16PtrFromString(fmt.Sprintf(format, args...))
+	caption, _ := windows.UTF16PtrFromString("splitwire")
+	windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONINFORMATION|windows.MB_SETFOREGROUND)
+}
+
 func errorBox(format string, args ...any) {
 	text, _ := windows.UTF16PtrFromString(fmt.Sprintf(format, args...))
 	caption, _ := windows.UTF16PtrFromString("splitwire")

@@ -235,3 +235,31 @@ func setKey(path, key, val string) error {
 	text = strings.TrimRight(text, "\r\n") + nl + nl + "[Splitwire]" + nl + entry + nl
 	return os.WriteFile(path, []byte(text), 0o600)
 }
+
+// CreateNew writes text as a new tunnel in Dir named base, or base-2,
+// base-3 and so on when that name is taken, and returns the name used.
+func CreateNew(base, text string) (string, error) {
+	dir, err := EnsureDir()
+	if err != nil {
+		return "", err
+	}
+	for i := 1; i < 100; i++ {
+		name := base
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		f, err := os.OpenFile(filepath.Join(dir, name+".conf"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, err = f.WriteString(text)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		return name, err
+	}
+	return "", fmt.Errorf("no free tunnel name for %s", base)
+}
