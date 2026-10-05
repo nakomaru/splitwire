@@ -338,7 +338,7 @@ func (a *app) changePort(name string) {
 		}
 		current = ap.Port()
 	}
-	prompt := fmt.Sprintf("Port for the %s proxy. Apps set to the old port need the new one.", name)
+	prompt := fmt.Sprintf("Port for the %s proxy. Update apps that use the old one.", name)
 	if _, ok := askPort("Proxy port: "+name, prompt, current, func(port uint16) error {
 		return userconf.SetProxyPort(path, port, proxied)
 	}); !ok {

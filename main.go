@@ -61,13 +61,14 @@ Usage:
   splitwire start <name>                Start an installed tunnel
   splitwire stop <name>                 Stop an installed tunnel
   splitwire status [name]               Show tunnels, the driver and peer statistics
-  splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
+  splitwire bootstrap                   Install wireguard.dll, the WireGuardNT and split tunnel drivers
   splitwire manager install [options]   Set up the service the notification area app uses:
                                         --start-menu or --no-start-menu adds or removes the Start
                                         menu shortcut, --boot or --no-boot turns reconnecting
-                                        tunnels at boot on or off, --drivers installs the drivers
-                                        now, --import imports from the WireGuard app;
-                                        "manager uninstall" removes the service
+                                        tunnels at boot on or off, --wireguard-driver and
+                                        --split-tunnel-driver install those drivers now, --import
+                                        imports from the WireGuard app; "manager uninstall"
+                                        removes the service
   splitwire cleanup [options]           Uninstall everything; --configs also deletes your tunnel
                                         files, --keep-wireguardnt keeps the WireGuardNT driver
   splitwire version
@@ -143,7 +144,7 @@ func runTray(args []string) {
 
 // Flags of manager install and cleanup.
 var (
-	installFlags = []string{"--start-menu", "--no-start-menu", "--boot", "--no-boot", "--drivers", "--import"}
+	installFlags = []string{"--start-menu", "--no-start-menu", "--boot", "--no-boot", "--wireguard-driver", "--split-tunnel-driver", "--import"}
 	cleanupFlags = []string{"--configs", "--keep-wireguardnt"}
 )
 
@@ -346,9 +347,15 @@ func run(args []string) error {
 			}
 			// The drivers install on demand and tunnels import later, so
 			// failures here leave the install standing.
-			if hasFlag(flags, "--drivers") {
-				if err := bootstrapAll(); err != nil {
-					log.Printf("Warning: drivers: %v; they install when a tunnel first needs them", err)
+			ctx := context.Background()
+			if hasFlag(flags, "--wireguard-driver") {
+				if err := bootstrap.EnsureWireGuardNT(ctx); err != nil {
+					log.Printf("Warning: %v; it installs when a VPN tunnel first connects", err)
+				}
+			}
+			if hasFlag(flags, "--split-tunnel-driver") {
+				if err := ensureSplitDriver(ctx); err != nil {
+					log.Printf("Warning: split tunnel driver: %v; it installs when an include or exclude tunnel first connects", err)
 				}
 			}
 			if hasFlag(flags, "--import") {
@@ -670,24 +677,33 @@ func stateName(s svc.State) string {
 	return fmt.Sprintf("state %d", s)
 }
 
+// bootstrapAll installs wireguard.dll, the WireGuardNT driver and the
+// split tunnel driver.
 func bootstrapAll() error {
 	ctx := context.Background()
 	if err := bootstrap.EnsureDirs(); err != nil {
 		return err
 	}
-	dll, err := bootstrap.EnsureWireGuardDLL(ctx)
-	if err != nil {
+	if err := bootstrap.EnsureWireGuardNT(ctx); err != nil {
+		return err
+	}
+	if err := ensureSplitDriver(ctx); err != nil {
+		return err
+	}
+	log.Printf("Ready: wireguard.dll, the WireGuardNT driver and the split tunnel driver (service %s running)", stdriver.ServiceName)
+	return nil
+}
+
+// ensureSplitDriver installs the split tunnel driver and starts its service.
+func ensureSplitDriver(ctx context.Context) error {
+	if err := bootstrap.EnsureDirs(); err != nil {
 		return err
 	}
 	sys, err := bootstrap.EnsureDriver(ctx)
 	if err != nil {
 		return err
 	}
-	if err := bootstrap.EnsureDriverService(sys); err != nil {
-		return err
-	}
-	log.Printf("Ready: %s, %s (driver service %s running)", dll, sys, stdriver.ServiceName)
-	return nil
+	return bootstrap.EnsureDriverService(sys)
 }
 
 // cleanup removes everything splitwire installed: its services, the split

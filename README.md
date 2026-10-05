@@ -94,8 +94,13 @@ once.
 - **Add splitwire to the Start menu**: a shortcut for every user.
 - **Start splitwire at sign-in**.
 - **Reconnect tunnels at boot**: the menu changes it later too.
+- **Install the WireGuard driver now**, while it is not installed:
+  WireGuardNT from the WireGuard project, which runs VPN tunnels. wireguard.dll
+  installs it with its first adapter, so setup creates a temporary one.
 - **Install the split tunnel driver now**, while it is not installed:
-  otherwise it installs when an include or exclude tunnel first connects.
+  Mullvad's open source driver, for per-app tunnels.
+
+Drivers left out install when a tunnel first needs them.
 - **Import tunnels from the WireGuard app**, when that app is installed (on
   while `%APPDATA%\splitwire` holds no tunnels).
 - **Delete this file afterward**, when run from outside Program Files: the
@@ -169,8 +174,8 @@ tunnel, and stop while no VPN runs.
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
-| `manager install [--start-menu] [--boot] [--import]` | Install or update the manager service the app uses, optionally adding the Start menu shortcut, turning on reconnecting at boot and importing from the WireGuard app (`manager uninstall` removes the service) |
-| `bootstrap` | Install the components without bringing a tunnel up |
+| `manager install [options]` | Install or update the manager service the app uses. `--start-menu`/`--no-start-menu` and `--boot`/`--no-boot` set the Start menu shortcut and reconnecting at boot, `--wireguard-driver` and `--split-tunnel-driver` install those drivers now, `--import` imports from the WireGuard app (`manager uninstall` removes the service) |
+| `bootstrap` | Install wireguard.dll, the WireGuardNT driver and the split tunnel driver without bringing a tunnel up |
 | `cleanup [--configs] [--keep-wireguardnt]` | Uninstall everything (see below); `--configs` also deletes `%APPDATA%\splitwire`, `--keep-wireguardnt` keeps the WireGuardNT driver |
 
 `install` expands `%VARIABLES%` and globs in `App` lines as the installing
