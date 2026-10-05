@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -22,9 +23,12 @@ import (
 	"splitwire/internal/elevate"
 	"splitwire/internal/engine"
 	"splitwire/internal/firewall"
+	"splitwire/internal/ipc"
 	"splitwire/internal/logx"
+	"splitwire/internal/manager"
 	"splitwire/internal/netcfg"
 	"splitwire/internal/service"
+	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
 	"splitwire/internal/userconf"
 	"splitwire/internal/wgimport"
@@ -45,7 +49,8 @@ Usage:
   splitwire stop <name>                 Stop an installed tunnel
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
-  splitwire cleanup                     Remove the driver service, firewall objects and files
+  splitwire manager install|uninstall   Set up or remove the service splitwire-tray uses
+  splitwire cleanup                     Remove services, the driver, firewall objects and files
   splitwire version
 
 A <tunnel> is a name, for %APPDATA%\splitwire\<name>.conf, or a path to a .conf file.
@@ -55,16 +60,19 @@ Commands that change the system ask for administrator rights.
 
 func main() {
 	args := os.Args[1:]
-	hold := false
+	hold, holdOnError := false, false
 	if len(args) > 0 && args[0] == elevate.HoldFlag {
 		hold = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == elevate.HoldOnErrorFlag {
+		holdOnError = true
 		args = args[1:]
 	}
 	err := run(args)
 	if err != nil {
 		log.Printf("Error: %v", err)
 	}
-	if hold {
+	if hold || (holdOnError && err != nil) {
 		elevate.WaitForEnter()
 	}
 	if err != nil {
@@ -127,6 +135,12 @@ func run(args []string) error {
 		}
 		return service.Run(args[1])
 	}
+	if args[0] == manager.RunCommand {
+		if len(args) != 2 {
+			return errors.New("manager-run needs the user SID")
+		}
+		return manager.Run(args[1])
+	}
 	if args[0] == wgimport.HelperCommand {
 		if len(args) < 3 {
 			return errors.New("helper needs an output folder and tunnel names")
@@ -173,6 +187,10 @@ func run(args []string) error {
 		if _, err := needArg(args, "<name>"); err != nil {
 			return err
 		}
+	case "manager":
+		if len(args) != 2 || (args[1] != "install" && args[1] != "uninstall") {
+			return errors.New("usage: splitwire manager install|uninstall")
+		}
 	case "status", "bootstrap", "cleanup":
 	default:
 		return fmt.Errorf("unknown command %q; run splitwire help", args[0])
@@ -204,6 +222,11 @@ func run(args []string) error {
 			name = args[1]
 		}
 		return status(name)
+	case "manager":
+		if args[1] == "install" {
+			return manager.Install()
+		}
+		return manager.Uninstall()
 	case "bootstrap":
 		return bootstrapAll()
 	case "cleanup":
@@ -384,12 +407,35 @@ func status(name string) error {
 			fmt.Printf("Tunnels in %s: %s\n", dir, strings.Join(names, ", "))
 		}
 	}
+	if manager.Installed() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rep, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpStatus})
+		cancel()
+		if err != nil {
+			fmt.Printf("Manager: %v\n", err)
+		} else {
+			st := rep.Status
+			fmt.Printf("Manager: tunnel %s", st.State)
+			if st.Tunnel != "" {
+				fmt.Printf(" (%s, mode %s)", st.Tunnel, st.Mode)
+			}
+			if st.Error != "" {
+				fmt.Printf(": %s", st.Error)
+			}
+			fmt.Println()
+			if st.Autostart != "" {
+				fmt.Printf("  connects %s at boot\n", st.Autostart)
+			}
+			for _, p := range st.Peers {
+				fmt.Printf("  peer %s: handshake %s, received %s, sent %s\n", p.PublicKey, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
+			}
+		}
+	} else {
+		fmt.Println("Manager: not installed (splitwire manager install)")
+	}
 	installed, err := service.List()
 	if err != nil {
 		return err
-	}
-	if len(installed) == 0 {
-		fmt.Println("No tunnels installed as services.")
 	}
 	for _, in := range installed {
 		fmt.Printf("Service %s: %s\n", service.Name(in.Tunnel), stateName(in.State))
@@ -473,6 +519,9 @@ func cleanup() error {
 			names[i] = in.Tunnel
 		}
 		return fmt.Errorf("uninstall these tunnels first: %s", strings.Join(names, ", "))
+	}
+	if err := manager.Uninstall(); err != nil {
+		return err
 	}
 	drv, err := stdriver.Open()
 	switch {

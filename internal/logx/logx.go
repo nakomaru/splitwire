@@ -46,10 +46,10 @@ func (w *writer) WriteWithTimestamp(p []byte, ts int64) (int, error) {
 	return w.write(p, time.Unix(0, ts))
 }
 
-// Setup sends the standard logger to stderr and, when path is not empty, to
-// that file as well.
-func Setup(path string) (io.Closer, error) {
-	w := &writer{out: []io.Writer{os.Stderr}}
+// Setup sends the standard logger to stderr, to extra writers and, when path
+// is not empty, to that file as well.
+func Setup(path string, extra ...io.Writer) (io.Closer, error) {
+	w := &writer{out: append([]io.Writer{os.Stderr}, extra...)}
 	var f *os.File
 	if path != "" {
 		var err error
@@ -70,3 +70,38 @@ func Setup(path string) (io.Closer, error) {
 type nopCloser struct{}
 
 func (nopCloser) Close() error { return nil }
+
+// Ring keeps the most recent log lines in memory.
+type Ring struct {
+	mu    sync.Mutex
+	lines []string
+	next  int
+	full  bool
+}
+
+// NewRing keeps up to n lines.
+func NewRing(n int) *Ring { return &Ring{lines: make([]string, n)} }
+
+// Write stores each complete line of p.
+func (r *Ring) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, line := range bytes.Split(bytes.TrimRight(p, "\n"), []byte("\n")) {
+		r.lines[r.next] = string(line)
+		r.next = (r.next + 1) % len(r.lines)
+		if r.next == 0 {
+			r.full = true
+		}
+	}
+	return len(p), nil
+}
+
+// Lines returns the stored lines, oldest first.
+func (r *Ring) Lines() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.full {
+		return append([]string(nil), r.lines[:r.next]...)
+	}
+	return append(append([]string(nil), r.lines[r.next:]...), r.lines[:r.next]...)
+}

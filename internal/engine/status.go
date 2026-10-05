@@ -10,7 +10,41 @@ import (
 	"golang.zx2c4.com/wireguard/windows/driver"
 
 	"splitwire/internal/bootstrap"
+	"splitwire/internal/stats"
 )
+
+func peerStats(a *driver.Adapter, name string) ([]stats.Peer, uint16, error) {
+	iface, err := a.Configuration()
+	if err != nil {
+		return nil, 0, err
+	}
+	c := conf.FromDriverConfiguration(iface, &conf.Config{Name: name})
+	peers := make([]stats.Peer, 0, len(c.Peers))
+	for _, p := range c.Peers {
+		s := stats.Peer{
+			PublicKey: p.PublicKey.String(),
+			RxBytes:   uint64(p.RxBytes),
+			TxBytes:   uint64(p.TxBytes),
+		}
+		if !p.Endpoint.IsEmpty() {
+			s.Endpoint = p.Endpoint.String()
+		}
+		if !p.LastHandshakeTime.IsEmpty() {
+			s.LastHandshake = time.Unix(0, int64(p.LastHandshakeTime))
+		}
+		peers = append(peers, s)
+	}
+	return peers, c.Interface.ListenPort, nil
+}
+
+// Peers reports the live peer statistics of the tunnel.
+func (t *Tunnel) Peers() ([]stats.Peer, error) {
+	if t.adapter == nil {
+		return nil, nil
+	}
+	peers, _, err := peerStats(t.adapter, t.cfg.WG.Name)
+	return peers, err
+}
 
 // PrintAdapterStatus writes peer statistics of a running tunnel. It reports
 // false when no adapter of that name exists.
@@ -30,37 +64,22 @@ func PrintAdapterStatus(w io.Writer, name string) (bool, error) {
 		return false, nil
 	}
 	defer a.Close()
-	iface, err := a.Configuration()
+	peers, port, err := peerStats(a, name)
 	if err != nil {
 		return true, err
 	}
-	c := conf.FromDriverConfiguration(iface, &conf.Config{Name: name})
-	fmt.Fprintf(w, "  interface %s: listening on port %d\n", name, c.Interface.ListenPort)
-	for _, p := range c.Peers {
-		fmt.Fprintf(w, "  peer %s\n", p.PublicKey.String())
-		if !p.Endpoint.IsEmpty() {
-			fmt.Fprintf(w, "    endpoint        %s\n", p.Endpoint.String())
+	fmt.Fprintf(w, "  interface %s: listening on port %d\n", name, port)
+	for _, p := range peers {
+		fmt.Fprintf(w, "  peer %s\n", p.PublicKey)
+		if p.Endpoint != "" {
+			fmt.Fprintf(w, "    endpoint        %s\n", p.Endpoint)
 		}
-		if p.LastHandshakeTime.IsEmpty() {
+		if p.LastHandshake.IsZero() {
 			fmt.Fprintf(w, "    last handshake  never\n")
 		} else {
-			at := time.Unix(0, int64(p.LastHandshakeTime))
-			fmt.Fprintf(w, "    last handshake  %s (%s ago)\n", at.Format("2006-01-02 15:04:05"), time.Since(at).Round(time.Second))
+			fmt.Fprintf(w, "    last handshake  %s (%s)\n", p.LastHandshake.Format("2006-01-02 15:04:05"), stats.Ago(p.LastHandshake))
 		}
-		fmt.Fprintf(w, "    transfer        %s received, %s sent\n", byteCount(uint64(p.RxBytes)), byteCount(uint64(p.TxBytes)))
+		fmt.Fprintf(w, "    transfer        %s received, %s sent\n", stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
 	}
 	return true, nil
-}
-
-func byteCount(b uint64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := uint64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }

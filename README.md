@@ -1,7 +1,8 @@
 # splitwire
 
-WireGuard for Windows with per-app split tunneling. One executable; it
-downloads and installs everything else it needs on first use.
+WireGuard for Windows with per-app split tunneling, with a command line
+and a notification area app. It downloads and installs everything else it
+needs on first use, so the WireGuard app is not required.
 
 - **full**: routes by `AllowedIPs`, the same as the WireGuard app.
 - **include**: only the listed apps (and their child processes) use the tunnel.
@@ -10,7 +11,7 @@ downloads and installs everything else it needs on first use.
 ## Quick start
 
 ```
-go build -o splitwire.exe .
+.\build.ps1                # builds splitwire.exe and splitwire-tray.exe
 splitwire import           # copy tunnels from the WireGuard app
 splitwire check home       # validate and show routes, DNS and apps
 splitwire up home          # run until Ctrl+C
@@ -32,6 +33,26 @@ imports that tunnel by itself when its file does not exist yet.
 Commands that change the system ask for administrator rights through UAC
 and continue in a new console window.
 
+## Tray app
+
+`splitwire-tray.exe` sits in the notification area. Its icon is gray when
+no tunnel is up, amber while one connects or disconnects, green when one is
+up and red after a failure. The menu lists every tunnel in
+`%APPDATA%\splitwire`; clicking one connects it (replacing any other) or
+disconnects it. It also shows the last handshake and transfer, edits
+configurations in Notepad, imports from the WireGuard app, shows the
+manager log, picks a tunnel to connect at boot and starts the tray at
+sign-in.
+
+The first run offers "Set up splitwire", which asks for administrator rights
+once to install the manager service (`splitwire manager install`). The
+manager runs as SYSTEM and does the privileged work; the tray runs as you
+and talks to it over the pipe `\\.\pipe\splitwire`, which only you, SYSTEM and
+Administrators can open. The tray reads your configurations and expands
+`%VARIABLES%` in `App` lines as you, so switching tunnels never prompts.
+When you edit the running tunnel's file, the menu offers to apply the
+changes.
+
 ## Commands
 
 | Command | Effect |
@@ -44,8 +65,9 @@ and continue in a new console window.
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
+| `manager install` | Install or update the manager service the tray app uses (`manager uninstall` removes it) |
 | `bootstrap` | Install the components without bringing a tunnel up |
-| `cleanup` | Remove the driver service, firewall objects and `%ProgramFiles%\splitwire` |
+| `cleanup` | Remove the manager, the driver service, firewall objects and `%ProgramFiles%\splitwire` |
 
 `install` expands `%VARIABLES%` and globs in `App` lines as the installing
 user, because the service runs as SYSTEM with a different profile.

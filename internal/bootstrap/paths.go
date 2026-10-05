@@ -136,18 +136,50 @@ func InstallExe() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) {
+	return dst, replaceFile(dst, b)
+}
+
+// TrayExe is the file name of the tray app, built next to splitwire.exe.
+const TrayExe = "splitwire-tray.exe"
+
+// InstallTray copies the tray app from beside the running executable into
+// the install root. It reports an empty path when there is none to copy.
+func InstallTray() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	src := filepath.Join(filepath.Dir(self), TrayExe)
+	b, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	bin, err := BinDir()
+	if err != nil {
+		return "", err
+	}
+	dst := filepath.Join(bin, TrayExe)
+	if strings.EqualFold(filepath.Clean(src), dst) {
 		return dst, nil
+	}
+	return dst, replaceFile(dst, b)
+}
+
+// replaceFile writes b to dst unless dst already holds it, moving a running
+// copy aside first.
+func replaceFile(dst string, b []byte) error {
+	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) {
+		return nil
 	}
 	if _, err := os.Stat(dst); err == nil {
 		aside := dst + ".old"
 		os.Remove(aside)
 		if err := os.Rename(dst, aside); err != nil {
-			return "", fmt.Errorf("move aside %s: %w", dst, err)
+			return fmt.Errorf("move aside %s: %w", dst, err)
 		}
 	}
-	if err := os.WriteFile(dst, b, 0o755); err != nil {
-		return "", err
-	}
-	return dst, nil
+	return os.WriteFile(dst, b, 0o755)
 }
