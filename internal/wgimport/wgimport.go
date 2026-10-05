@@ -26,6 +26,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/conf/dpapi"
 
 	"splitwire/internal/bootstrap"
+	"splitwire/internal/config"
 	"splitwire/internal/userconf"
 )
 
@@ -37,14 +38,6 @@ const (
 	encSuffix     = ".conf.dpapi"
 	errorsFile    = "errors.txt"
 )
-
-// template is appended to imported configurations.
-const template = `
-# Uncomment to split this tunnel by app (see splitwire's example.conf):
-# [Splitwire]
-# Mode = include
-# App = C:\Windows\System32\curl.exe
-`
 
 func wireguardConfigDir() (string, error) {
 	pf, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
@@ -176,7 +169,7 @@ func Import(names []string, overwrite bool) (Result, error) {
 		if err != nil {
 			return res, fmt.Errorf("decrypted %s missing: %w", n, err)
 		}
-		text := strings.TrimRight(string(b), "\r\n") + "\n" + template
+		text := strings.TrimRight(string(b), "\r\n") + "\n\n" + config.ExampleSection
 		if err := os.WriteFile(filepath.Join(dst, n+".conf"), []byte(text), 0o600); err != nil {
 			return res, err
 		}

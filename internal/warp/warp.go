@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.zx2c4.com/wireguard/windows/conf"
+
+	"splitwire/internal/config"
 )
 
 const (
@@ -162,6 +164,7 @@ func (d *Device) Config() string {
 	b.WriteString("[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", d.PeerPublicKey)
 	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
-	fmt.Fprintf(&b, "Endpoint = %s\n", d.Endpoint)
+	fmt.Fprintf(&b, "Endpoint = %s\n\n", d.Endpoint)
+	b.WriteString(config.ExampleSection)
 	return b.String()
 }

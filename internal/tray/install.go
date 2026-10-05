@@ -269,21 +269,17 @@ func (a *app) uninstall() {
 		heading: "Your files",
 		label:   "Delete my tunnel configurations",
 		detail:  `%APPDATA%\splitwire, including your private keys.`,
-	}, {
-		heading:  "Drivers",
-		label:    "Remove the split tunnel driver",
-		detail:   "Always removed. A copy from the Mullvad app stays.",
-		checked:  true,
-		disabled: true,
 	}}
 	if wgimport.AppInstalled() {
 		opts = append(opts, option{
+			heading:  "Drivers",
 			label:    "Remove the WireGuard driver",
 			detail:   "Stays: the WireGuard app uses it.",
 			disabled: true,
 		})
 	} else {
 		opts = append(opts, option{
+			heading: "Drivers",
 			label:   "Remove the WireGuard driver",
 			detail:  "WireGuardNT from wireguard.com.",
 			checked: true,
@@ -295,7 +291,7 @@ func (a *app) uninstall() {
 	if !ok {
 		return
 	}
-	const configs, wireguardNT = 0, 2
+	const configs, wireguardNT = 0, 1
 	args := []string{"cleanup"}
 	if states[configs] {
 		args = append(args, "--configs")
