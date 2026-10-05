@@ -122,8 +122,10 @@ Show manager log, Uninstall SplitWire..., Quit
 - The top lines show each running tunnel's last handshake and transfer,
   failures, and an **Apply changes** entry when a running tunnel's file was
   edited.
-- **Reconnect tunnels at boot** brings whatever runs back up when Windows
-  starts, before anyone signs in, through the manager service.
+- **Reconnect tunnels when Windows starts** brings whatever runs back up
+  before anyone signs in, through the manager service, which starts with
+  Windows. It is separate from the app: the window and the notification
+  area icon start at sign-in, or whenever you open them.
 - **Start SplitWire at sign-in** opens the app when you sign in, through
   your user's Run entry; the notification area exists only once you sign in.
 - **Uninstall SplitWire...** removes everything, as `splitwire cleanup`
