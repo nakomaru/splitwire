@@ -191,23 +191,33 @@ func handOver(self, installed string) error {
 }
 
 // offerSetup shows the install window once per run when the manager
-// service is missing.
+// service is missing. Without the service the app can do nothing, so it
+// quits when the window is canceled or the install does not complete.
 func (a *app) offerSetup() {
-	a.setupOnce.Do(a.setup)
+	a.setupOnce.Do(func() {
+		if !a.install() {
+			systray.Quit()
+		}
+	})
 }
 
-// setup installs splitwire from the install window's choices and switches
-// to the installed copy.
-func (a *app) setup() {
+// setup is the menu's Set up item: the install window, leaving the app
+// running when canceled.
+func (a *app) setup() { a.install() }
+
+// install installs splitwire from the install window's choices and
+// switches to the installed copy. It reports whether the install
+// completed.
+func (a *app) install() bool {
 	self := selfExe()
 	installed, err := installedExe()
 	if err != nil {
 		errorBox("%v", err)
-		return
+		return false
 	}
 	plan, ok := installWindow(self, installed, false)
 	if !ok || !plan.install(self) {
-		return
+		return false
 	}
 	if !samePath(self, installed) {
 		a.next = installed
@@ -215,13 +225,14 @@ func (a *app) setup() {
 			a.nextArgs = deleteArgs(self)
 		}
 		systray.Quit()
-		return
+		return true
 	}
 	a.refreshLogin()
 	select {
 	case a.retry <- struct{}{}:
 	default:
 	}
+	return true
 }
 
 func (a *app) uninstall() {

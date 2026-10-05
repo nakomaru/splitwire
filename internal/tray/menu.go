@@ -274,6 +274,7 @@ func (a *app) refreshLocked() {
 	enable(a.bootMI, connected)
 	check(a.bootMI, connected && st.Boot)
 	show(a.setupMI, a.link == linkMissing || a.link == linkFailed)
+	show(a.loginMI, a.link != linkMissing)
 	show(a.uninstallMI, a.link != linkMissing)
 }
 
