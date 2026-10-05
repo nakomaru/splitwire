@@ -48,8 +48,9 @@ type app struct {
 	gen     chan struct{}
 
 	setupOnce sync.Once
-	// next is the executable to start once the menu loop ends.
-	next string
+	// next starts with nextArgs once the menu loop ends.
+	next     string
+	nextArgs []string
 
 	menus       map[string]*tunnelMenu
 	summaryMI   *systray.MenuItem

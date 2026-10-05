@@ -17,10 +17,15 @@ import (
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/ipc"
+	"splitwire/internal/shortcut"
+	"splitwire/internal/tray"
 )
 
 // ServiceName is the manager service.
 const ServiceName = ipc.ServiceName
+
+// StartMenuName names the Start menu shortcut to the app.
+const StartMenuName = "splitwire"
 
 // RunCommand is the hidden CLI command the service executes.
 const RunCommand = "manager-run"
@@ -50,6 +55,11 @@ func Install() error {
 		return err
 	}
 	bootstrap.RemoveLegacyTray()
+	if lnk, err := shortcut.StartMenu(StartMenuName); err == nil {
+		if err := shortcut.Create(lnk, exe, tray.Command, "WireGuard with per-app split tunneling"); err != nil {
+			log.Printf("Warning: Start menu shortcut: %v", err)
+		}
+	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err

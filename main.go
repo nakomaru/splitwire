@@ -37,6 +37,7 @@ import (
 	"splitwire/internal/netcfg"
 	"splitwire/internal/proxy"
 	"splitwire/internal/service"
+	"splitwire/internal/shortcut"
 	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
 	"splitwire/internal/tray"
@@ -82,7 +83,7 @@ func main() {
 		}
 	}
 	if len(args) > 0 && args[0] == tray.Command {
-		runTray()
+		runTray(args[1:])
 		return
 	}
 	hold, holdOnError := false, false
@@ -110,11 +111,11 @@ func main() {
 
 // runTray runs the notification area app, detached from any shell so the
 // shell gets its prompt back.
-func runTray() {
+func runTray(args []string) {
 	if console.Current() == console.Shared {
 		self, err := os.Executable()
 		if err == nil {
-			cmd := exec.Command(self, tray.Command)
+			cmd := exec.Command(self, append([]string{tray.Command}, args...)...)
 			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS}
 			err = cmd.Start()
 		}
@@ -125,7 +126,7 @@ func runTray() {
 		return
 	}
 	console.Free()
-	if err := tray.Run(); err != nil {
+	if err := tray.Run(args); err != nil {
 		text, _ := windows.UTF16PtrFromString("splitwire could not start:\n\n" + err.Error())
 		caption, _ := windows.UTF16PtrFromString("splitwire")
 		windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR)
@@ -678,6 +679,11 @@ func cleanup(configs bool) error {
 		log.Printf("Removed %s", root)
 	}
 
+	if lnk, err := shortcut.StartMenu(manager.StartMenuName); err == nil {
+		if err := os.Remove(lnk); err == nil {
+			log.Printf("Removed the Start menu shortcut")
+		}
+	}
 	if err := tray.RemoveRunAtLogin(); err != nil {
 		log.Printf("Warning: remove the sign-in entry: %v", err)
 	}

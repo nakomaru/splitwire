@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,9 +33,13 @@ const (
 	runValue  = "splitwire"
 )
 
+// deleteFlag passes the installed copy a setup file to delete, and the
+// process ID to wait for before deleting it.
+const deleteFlag = "--delete-setup"
+
 // Run starts the tray app. A copy run from outside the install root hands
 // over to the installed copy, updating it first when the two differ.
-func Run() error {
+func Run(args []string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -46,6 +51,11 @@ func Run() error {
 	if !samePath(self, installed) {
 		if _, err := os.Stat(installed); err == nil {
 			return handOver(self, installed)
+		}
+	}
+	if len(args) == 3 && args[0] == deleteFlag {
+		if pid, err := strconv.ParseUint(args[2], 10, 32); err == nil {
+			go deleteSetup(args[1], uint32(pid), installed)
 		}
 	}
 
@@ -73,9 +83,34 @@ func Run() error {
 	windows.ReleaseMutex(mutex)
 	windows.CloseHandle(mutex)
 	if a.next != "" {
-		return startTray(a.next)
+		return startTray(a.next, a.nextArgs...)
 	}
 	return nil
+}
+
+// offerDelete asks whether to delete the setup file self now that the
+// installed copy runs, and returns the arguments that hand the deletion to
+// the installed copy.
+func offerDelete(self string) []string {
+	if !ask("splitwire is installed in Program Files.\n\nDelete the setup file?\n\n" + self) {
+		return nil
+	}
+	return []string{deleteFlag, self, strconv.Itoa(os.Getpid())}
+}
+
+// deleteSetup deletes the setup file at path once the process that ran it
+// has exited. It deletes only a file identical to the installed copy.
+func deleteSetup(path string, pid uint32, installed string) {
+	if p, err := windows.OpenProcess(windows.SYNCHRONIZE, false, pid); err == nil {
+		windows.WaitForSingleObject(p, windows.INFINITE)
+		windows.CloseHandle(p)
+	}
+	if samePath(path, installed) || !sameContent(path, installed) {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		errorBox("Could not delete the setup file:\n\n%v", err)
+	}
 }
 
 func installedExe() (string, error) {
@@ -158,13 +193,14 @@ func trayRunning() bool {
 	return true
 }
 
-func startTray(exe string) error {
-	return exec.Command(exe, Command).Start()
+func startTray(exe string, args ...string) error {
+	return exec.Command(exe, append([]string{Command}, args...)...).Start()
 }
 
 // handOver runs the installed copy instead of this one, offering to update
-// it to this copy when they differ.
+// it to this copy when they differ, and then to delete this copy.
 func handOver(self, installed string) error {
+	var deleteArgs []string
 	if !sameContent(self, installed) {
 		if ask("This copy of splitwire differs from the installed one.\n\n" +
 			"Update the installed splitwire to this copy? Running tunnels reconnect, " +
@@ -176,12 +212,13 @@ func handOver(self, installed string) error {
 				errorBox("%v", err)
 				return nil
 			}
+			deleteArgs = offerDelete(self)
 		}
 	}
 	if trayRunning() {
 		return nil
 	}
-	return startTray(installed)
+	return startTray(installed, deleteArgs...)
 }
 
 // ---- dialogs ----
@@ -263,6 +300,7 @@ func (a *app) setup() {
 	}
 	if !samePath(selfExe(), installed) {
 		a.next = installed
+		a.nextArgs = offerDelete(selfExe())
 		systray.Quit()
 		return
 	}

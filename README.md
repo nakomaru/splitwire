@@ -88,10 +88,14 @@ Show manager log, Uninstall splitwire..., Quit
   below, and asks whether to delete your tunnel configurations too.
 
 The first run asks to set splitwire up. Setup copies the executable to
-`%ProgramFiles%\splitwire\bin`, installs the manager service, turns on start
-at sign-in and switches to the installed copy, so the downloaded file can
-go. Double-clicking a different `splitwire.exe` later offers to update the
-installed one; an identical copy opens the installed app.
+`%ProgramFiles%\splitwire\bin`, installs the manager service, adds a
+splitwire shortcut to the Start menu for every user, turns on start at
+sign-in and switches to the installed copy. It then offers to delete the
+setup file; the installed copy deletes it once the setup process has
+exited, and only when it is identical to the installed executable.
+Double-clicking a different `splitwire.exe` later offers to update the
+installed one, then to delete that file the same way; an identical copy
+opens the installed app.
 
 The manager service runs as SYSTEM and does the privileged work; the app
 runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
@@ -197,7 +201,7 @@ Everything lives in `%ProgramFiles%\splitwire`:
 - the WireGuardNT driver, unless the WireGuard app is installed and uses it
 - `%ProgramFiles%\splitwire`; files still in use, such as the running app,
   are deleted at the next restart
-- the sign-in entry and the app's files in `%TEMP%`
+- the Start menu shortcut, the sign-in entry and the app's files in `%TEMP%`
 - with `--configs`, or when the menu's question is answered Yes,
   `%APPDATA%\splitwire`
 
