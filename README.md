@@ -98,7 +98,6 @@ split tunnel driver, and the window says so.
   user can control the service, so other accounts get no shortcut.
 - **Start splitwire at sign-in**.
 - **Reconnect tunnels at boot**: the menu changes it later too.
-
 - **Import tunnels from the WireGuard app**, when that app is installed (on
   while `%APPDATA%\splitwire` holds no tunnels).
 - **Delete this file afterward**, when run from outside Program Files: the
