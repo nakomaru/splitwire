@@ -149,7 +149,7 @@ func Delete(ctx context.Context, id, token string) error {
 // needs.
 func (d *Device) Config() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Cloudflare WARP device %s (%s account), created by splitwire %s.\n",
+	fmt.Fprintf(&b, "# Cloudflare WARP device %s (%s account), created by SplitWire %s.\n",
 		d.ID, d.AccountType, time.Now().Format("2006-01-02 15:04"))
 	fmt.Fprintf(&b, "# WarpToken = %s\n\n", d.Token)
 	b.WriteString("[Interface]\n")

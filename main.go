@@ -48,7 +48,7 @@ import (
 
 const version = "0.4.0"
 
-const usage = `splitwire ` + version + ` - WireGuard with per-app split tunneling
+const usage = `SplitWire ` + version + ` - WireGuard with per-app split tunneling
 
 Usage:
   splitwire                             Open the app and its window (also by double-clicking)
@@ -137,8 +137,8 @@ func runTray(args []string) {
 	}
 	console.Free()
 	if err := tray.Run(args); err != nil {
-		text, _ := windows.UTF16PtrFromString("splitwire could not start:\n\n" + err.Error())
-		caption, _ := windows.UTF16PtrFromString("splitwire")
+		text, _ := windows.UTF16PtrFromString("SplitWire could not start:\n\n" + err.Error())
+		caption, _ := windows.UTF16PtrFromString("SplitWire")
 		windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR)
 		os.Exit(1)
 	}

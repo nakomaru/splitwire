@@ -205,7 +205,7 @@ func quitRunningTray() error {
 		return nil
 	}
 	if err == nil {
-		err = errors.New("the running splitwire tray app did not exit; quit it from its menu and try again")
+		err = errors.New("the running SplitWire tray app did not exit; quit it from its menu and try again")
 	}
 	return err
 }
@@ -228,13 +228,13 @@ func startTray(exe string, args ...string) error {
 
 func infoBox(format string, args ...any) {
 	text, _ := windows.UTF16PtrFromString(fmt.Sprintf(format, args...))
-	caption, _ := windows.UTF16PtrFromString("splitwire")
+	caption, _ := windows.UTF16PtrFromString("SplitWire")
 	windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONINFORMATION|windows.MB_SETFOREGROUND)
 }
 
 func errorBox(format string, args ...any) {
 	text, _ := windows.UTF16PtrFromString(fmt.Sprintf(format, args...))
-	caption, _ := windows.UTF16PtrFromString("splitwire")
+	caption, _ := windows.UTF16PtrFromString("SplitWire")
 	windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR|windows.MB_SETFOREGROUND)
 }
 

@@ -115,8 +115,8 @@ func Install(opts Options) error {
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
 		Dependencies: []string{"Nsi", "TcpIp"},
-		DisplayName:  "splitwire manager",
-		Description:  "Runs splitwire tunnels for the splitwire app.",
+		DisplayName:  "SplitWire manager",
+		Description:  "Runs SplitWire tunnels for the SplitWire app.",
 		SidType:      windows.SERVICE_SID_TYPE_UNRESTRICTED,
 	}
 	s, err := m.OpenService(ServiceName)

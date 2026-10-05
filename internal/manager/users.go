@@ -67,7 +67,7 @@ func addUser(sid string) error {
 			return nil
 		}
 	}
-	log.Printf("Allowing %s to control splitwire", accountName(sid))
+	log.Printf("Allowing %s to control SplitWire", accountName(sid))
 	return writeUsers(append(sids, sid))
 }
 
@@ -104,15 +104,15 @@ func Leave(sid string) error {
 		}
 	}
 	if len(kept) == len(sids) {
-		return fmt.Errorf("%s is not a splitwire user", accountName(sid))
+		return fmt.Errorf("%s is not a SplitWire user", accountName(sid))
 	}
 	if len(kept) == 0 {
-		return errors.New("this is the last splitwire user; uninstall splitwire instead")
+		return errors.New("this is the last SplitWire user; uninstall SplitWire instead")
 	}
 	if err := writeUsers(kept); err != nil {
 		return err
 	}
-	log.Printf("Removed %s from splitwire's users", accountName(sid))
+	log.Printf("Removed %s from SplitWire's users", accountName(sid))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpUsers}); err != nil {

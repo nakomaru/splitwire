@@ -464,7 +464,7 @@ func layout(hwnd uintptr, d *dialogSpec, rows []row, buttonGap int) {
 
 func warnBox(hwnd uintptr, text string) {
 	t, _ := windows.UTF16PtrFromString(text)
-	caption, _ := windows.UTF16PtrFromString("splitwire")
+	caption, _ := windows.UTF16PtrFromString("SplitWire")
 	windows.MessageBox(windows.HWND(hwnd), t, caption, windows.MB_OK|windows.MB_ICONWARNING)
 }
 

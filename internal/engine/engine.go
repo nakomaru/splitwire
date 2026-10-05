@@ -88,7 +88,7 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 	mutex, err := windows.CreateMutex(nil, true, name)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		windows.CloseHandle(mutex)
-		return nil, errors.New("another splitwire tunnel is running")
+		return nil, errors.New("another SplitWire tunnel is running")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create instance mutex: %w", err)

@@ -24,7 +24,7 @@ import (
 var Version string
 
 // StartMenuName names the Start menu shortcut to the app.
-const StartMenuName = "splitwire"
+const StartMenuName = "SplitWire"
 
 // deleteArgs hand the deletion of the setup file self to the installed
 // copy, which waits for this process to exit first.
@@ -86,7 +86,7 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 	choices := []choice{{
 		option: option{
 			heading: "Install",
-			label:   "Add splitwire to the Start menu",
+			label:   "Add SplitWire to the Start menu",
 			detail:  "Your account only.",
 			checked: !updating || startMenuExists(),
 		},
@@ -109,7 +109,7 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 	choices = append(choices,
 		choice{option: option{
 			heading: "Startup",
-			label:   "Start splitwire at sign-in",
+			label:   "Start SplitWire at sign-in",
 			detail:  "Opens this app in the notification area.",
 			checked: !updating || runAtLogin(),
 		}, key: "signIn"},
@@ -120,12 +120,12 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 		}, on: "--boot", off: "--no-boot"},
 	)
 
-	title, button := "Install splitwire", "Install"
-	intro := "Installs splitwire into Program Files with a background service, so tunnels " +
+	title, button := "Install SplitWire", "Install"
+	intro := "Installs SplitWire into Program Files with a background service, so tunnels " +
 		"connect without prompts.\n\n" + driversNote
 	if updating {
-		title, button = "Update splitwire", "Update"
-		intro = fmt.Sprintf("Updates splitwire from version %s to %s. Running tunnels reconnect.",
+		title, button = "Update SplitWire", "Update"
+		intro = fmt.Sprintf("Updates SplitWire from version %s to %s. Running tunnels reconnect.",
 			installedVersion(installed), Version)
 		if !bootstrap.WireGuardNTInstalled() || !bootstrap.SplitDriverInstalled() {
 			intro += "\n\n" + driversNote
@@ -195,10 +195,12 @@ func setStartMenu(on bool) error {
 	if err != nil {
 		return err
 	}
+	// Saving over a shortcut keeps its file name's letter case, so the
+	// shortcut is made anew.
+	if err := os.Remove(lnk); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	if !on {
-		if err := os.Remove(lnk); err != nil && !os.IsNotExist(err) {
-			return err
-		}
 		return nil
 	}
 	installed, err := installedExe()
@@ -286,7 +288,7 @@ func (a *app) uninstall() {
 	if others > 0 {
 		opts = append(opts, option{
 			heading: "Other users",
-			label:   fmt.Sprintf("Keep splitwire for the %s", plural(others, "other user")),
+			label:   fmt.Sprintf("Keep SplitWire for the %s", plural(others, "other user")),
 			detail:  "Removes only your access, Start menu shortcut and sign-in entry.",
 			checked: true,
 		})
@@ -307,12 +309,12 @@ func (a *app) uninstall() {
 		opts = append(opts, option{
 			heading: "Drivers",
 			label:   "Remove the WireGuard driver",
-			detail:  "WireGuardNT from wireguard.com, unless splitwire stays for others.",
+			detail:  "WireGuardNT from wireguard.com, unless SplitWire stays for others.",
 			checked: true,
 		})
 	}
-	states, ok := askOptions("Uninstall splitwire",
-		"Disconnects every tunnel and removes splitwire, its service and its firewall entries.",
+	states, ok := askOptions("Uninstall SplitWire",
+		"Disconnects every tunnel and removes SplitWire, its service and its firewall entries.",
 		opts, "Uninstall")
 	if !ok {
 		return

@@ -1,4 +1,4 @@
-# splitwire
+# SplitWire
 
 WireGuard for Windows with per-app split tunneling, in one executable:
 double-clicked, `splitwire.exe` is a notification area app; run from a
@@ -41,7 +41,7 @@ WireGuard `.conf` plus an optional `[Splitwire]` section; see
 programs whose paths contain "firefox", for filling in `App` lines.
 
 `import` copies tunnels out of the WireGuard app. The app keeps them
-encrypted for the SYSTEM account, so splitwire decrypts them through a
+encrypted for the SYSTEM account, so SplitWire decrypts them through a
 temporary service that runs as SYSTEM and deletes itself afterward. Each
 imported file ends with a commented `[Splitwire]` section. `up <name>`
 imports that tunnel by itself when its file does not exist yet.
@@ -51,7 +51,7 @@ and continue in a new console window.
 
 ## The window
 
-Starting splitwire, from the Start menu or by double-clicking it, opens its
+Starting SplitWire, from the Start menu or by double-clicking it, opens its
 window; so does clicking the notification area icon. Starting it again
 while it runs brings the window back. At sign-in it starts in the
 background.
@@ -100,13 +100,13 @@ Office VPN, WARP proxy 127.0.0.1:1080
   Office (VPN): handshake 4s ago, received 1.20 GiB, sent 31.00 MiB
   WARP (proxy 127.0.0.1:1080): handshake 9s ago, ...
   Apply changes to WARP
-Open splitwire
+Open SplitWire
 VPN: Office   >  Off / Office - include, 2 apps / WARP - ... (proxy now)
 Proxies         >  WARP - 127.0.0.1:1080 / backup - port picked from 1080 on first use
 Disconnect all
 Reconnect tunnels at boot
-Start splitwire at sign-in
-Show manager log, Uninstall splitwire..., Quit
+Start SplitWire at sign-in
+Show manager log, Uninstall SplitWire..., Quit
 ```
 
 - **VPN** picks the one tunnel that routes apps by its `Mode`, or Off.
@@ -118,9 +118,9 @@ Show manager log, Uninstall splitwire..., Quit
   edited.
 - **Reconnect tunnels at boot** brings whatever runs back up when Windows
   starts, before anyone signs in, through the manager service.
-- **Start splitwire at sign-in** opens the app when you sign in, through
+- **Start SplitWire at sign-in** opens the app when you sign in, through
   your user's Run entry; the notification area exists only once you sign in.
-- **Uninstall splitwire...** removes everything, as `splitwire cleanup`
+- **Uninstall SplitWire...** removes everything, as `splitwire cleanup`
   below, and asks whether to delete your tunnel configurations too.
 
 The first run opens the install window: checkboxes with descriptions, grouped
@@ -130,9 +130,9 @@ rights once. Every install also puts in place the WireGuard driver
 first adapter, so setup creates a temporary one) and Mullvad's open source
 split tunnel driver, and the window says so.
 
-- **Add splitwire to the Start menu**: your own Start menu; each user who
+- **Add SplitWire to the Start menu**: your own Start menu; each user who
   runs setup gets their own.
-- **Start splitwire at sign-in**.
+- **Start SplitWire at sign-in**.
 - **Reconnect tunnels at boot**: the menu changes it later too.
 - **Import tunnels from the WireGuard app**, when that app is installed (on
   while `%APPDATA%\splitwire` holds no tunnels).
@@ -155,7 +155,7 @@ system colors.
 
 The manager service runs as SYSTEM and does the privileged work; the app
 runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
-splitwire's users, SYSTEM and Administrators can open. The app reads your configurations
+SplitWire's users, SYSTEM and Administrators can open. The app reads your configurations
 and expands `%VARIABLES%` in `App` lines as you, so switching tunnels never
 prompts.
 
@@ -166,7 +166,7 @@ flash as it starts.
 
 ## Several users
 
-Each Windows account that runs setup becomes one of splitwire's users,
+Each Windows account that runs setup becomes one of SplitWire's users,
 listed by SID in `%ProgramFiles%\splitwire\configs\users`, which only SYSTEM
 and Administrators can read. Setup passes the app's own account, so a
 standard user who types an administrator's password is the one added. Every
@@ -174,7 +174,7 @@ user keeps their own tunnel files, Start menu shortcut and sign-in setting;
 the running tunnels are the PC's, so each user sees and can change them, and
 one tunnel runs as the VPN for everyone.
 
-While other users remain, the uninstall window offers to keep splitwire for
+While other users remain, the uninstall window offers to keep SplitWire for
 them, which removes only your access (`splitwire manager leave`), your
 shortcut and your sign-in entry, and optionally your configurations.
 
@@ -182,7 +182,7 @@ shortcut and your sign-in entry, and optionally your configurations.
 
 A tunnel running as a proxy listens on its `Proxy` address, `127.0.0.1` and
 a port from 1080 up by default. The first time a tunnel runs as a proxy,
-splitwire picks a port no other tunnel claims and writes it to the file as
+SplitWire picks a port no other tunnel claims and writes it to the file as
 `Proxy = 1080`, so app settings keep working. The port serves both
 protocols:
 
@@ -257,7 +257,7 @@ Everything lives in `%ProgramFiles%\splitwire`:
   Mullvad VPN 2026.5 installer on cdn.mullvad.net with HTTP range requests,
   which downloads about 256 KiB of the 134 MB file. It runs as the
   demand-start kernel service `mullvad-split-tunnel`. When the Mullvad VPN
-  app has installed that service, splitwire uses it as the app left it,
+  app has installed that service, SplitWire uses it as the app left it,
   while the Mullvad daemon is stopped, and never changes or removes it.
 - `bin\splitwire.exe`, `configs\`, `logs\`: the installed app, which the
   services run, and the services' configuration copies and logs. `configs`
@@ -276,7 +276,7 @@ tunnel it makes a double hop.
 
 ## Uninstalling
 
-`splitwire cleanup`, or **Uninstall splitwire...** in the menu, removes the
+`splitwire cleanup`, or **Uninstall SplitWire...** in the menu, removes the
 following. The menu's uninstall window has checkboxes for deleting the
 configurations (off) and the WireGuardNT driver (on, and unavailable while
 the WireGuard app is installed).
@@ -284,8 +284,8 @@ the WireGuard app is installed).
 - the manager service, every `splitwire$<name>` tunnel service and a
   leftover `splitwire-wg-import` service
 - the `mullvad-split-tunnel` driver service, after resetting the driver,
-  when it runs splitwire's copy; the Mullvad VPN app's stays
-- the splitwire firewall provider and sublayers
+  when it runs SplitWire's copy; the Mullvad VPN app's stays
+- the SplitWire firewall provider and sublayers
 - the WireGuardNT driver, unless the WireGuard app is installed and uses it
   or `--keep-wireguardnt` is given
 - `%ProgramFiles%\splitwire`; files still in use, such as the running app,
@@ -295,7 +295,7 @@ the WireGuard app is installed).
 
 Windows keeps a network profile entry for every network adapter it has
 seen, including the tunnels' adapters, under
-`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList`; splitwire
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList`; SplitWire
 leaves those, as the WireGuard app does.
 
 ## Private keys
@@ -314,7 +314,7 @@ Against a stolen or copied disk, the protection that works is BitLocker
 
 The Mullvad driver rebinds sockets of chosen processes from one local
 address (its "tunnel" address) to another (its "internet" address), and
-blocks those processes on the first address. splitwire uses it as designed for
+blocks those processes on the first address. SplitWire uses it as designed for
 exclude mode, and swaps the two addresses for include mode:
 
 | Mode | Driver "tunnel" address | Driver "internet" address | Tunnel default route |
@@ -346,7 +346,7 @@ driver, so the driver's own permits for listed apps outrank them.
 - **Existing connections keep their route** until the app reconnects; start
   the tunnel before the apps it covers.
 - One tunnel runs as the VPN at a time. The driver admits one controller, so
-  the Mullvad VPN app cannot run alongside splitwire either.
+  the Mullvad VPN app cannot run alongside SplitWire either.
 - **Proxies work only for apps with proxy settings.** Most games and voice
   chat have none. UDP goes through a proxy only for apps that use SOCKS5 UDP
   (UDP ASSOCIATE); browsers use TCP through a proxy.
@@ -355,7 +355,7 @@ driver, so the driver's own permits for listed apps outrank them.
   password.
 - One tunnel cannot run as the VPN and a proxy at once: both would use the
   same WireGuard key, and the server tracks one endpoint per key.
-- If splitwire is killed without shutting down, the driver stays engaged until
+- If SplitWire is killed without shutting down, the driver stays engaged until
   the next `up` or `cleanup` resets it. In include mode the listed apps have
   no network until then; the WireGuard adapter itself disappears with the
   process.
@@ -366,5 +366,5 @@ driver, so the driver's own permits for listed apps outrank them.
 [wireguard-windows](https://git.zx2c4.com/wireguard-windows/) (MIT, see
 `internal/firewall/LICENSE`). The split tunnel driver is
 [mullvad/win-split-tunnel](https://github.com/mullvad/win-split-tunnel)
-(GPL-3.0 or MPL-2.0); splitwire downloads Mullvad's signed build at run time
+(GPL-3.0 or MPL-2.0); SplitWire downloads Mullvad's signed build at run time
 and does not redistribute it.

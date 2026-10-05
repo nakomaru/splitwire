@@ -11,8 +11,8 @@
         "fixed": {"file_version": "0.4.0.0", "product_version": "0.4.0.0"},
         "info": {
           "0409": {
-            "FileDescription": "splitwire",
-            "ProductName": "splitwire",
+            "FileDescription": "SplitWire",
+            "ProductName": "SplitWire",
             "ProductVersion": "0.4.0",
             "FileVersion": "0.4.0",
             "OriginalFilename": "splitwire.exe"

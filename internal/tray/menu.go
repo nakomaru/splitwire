@@ -44,7 +44,7 @@ func (a *app) rebuild() {
 	a.gen = gen
 	systray.ResetMenu()
 
-	a.summaryMI = systray.AddMenuItem("splitwire", "")
+	a.summaryMI = systray.AddMenuItem("SplitWire", "")
 	a.summaryMI.Disable()
 	a.menus = make(map[string]*tunnelMenu)
 	for _, name := range a.names {
@@ -59,7 +59,7 @@ func (a *app) rebuild() {
 	}
 	systray.AddSeparator()
 
-	a.onClick(systray.AddMenuItem("Open splitwire", "Tunnels, their apps and settings"), gen, a.openWindow)
+	a.onClick(systray.AddMenuItem("Open SplitWire", "Tunnels, their apps and settings"), gen, a.openWindow)
 	a.vpnMI = systray.AddMenuItem("VPN", "One tunnel routes apps by its Mode")
 	a.vpnOffMI = a.vpnMI.AddSubMenuItemCheckbox("Off", "", true)
 	a.onClick(a.vpnOffMI, gen, a.vpnOff)
@@ -82,14 +82,14 @@ func (a *app) rebuild() {
 	a.onClick(a.downAllMI, gen, func() { a.stop("") })
 	a.bootMI = systray.AddMenuItemCheckbox("Reconnect tunnels at boot", "Bring the running tunnels back up when Windows starts, before sign-in", false)
 	a.onClick(a.bootMI, gen, a.toggleBoot)
-	a.loginMI = systray.AddMenuItemCheckbox("Start splitwire at sign-in", "", runAtLogin())
+	a.loginMI = systray.AddMenuItemCheckbox("Start SplitWire at sign-in", "", runAtLogin())
 	a.onClick(a.loginMI, gen, a.toggleLogin)
 	systray.AddSeparator()
 	a.onClick(systray.AddMenuItem("Show manager log", ""), gen, a.showLog)
-	a.setupMI = systray.AddMenuItem("Set up splitwire (administrator)...", "Install splitwire and its background service")
+	a.setupMI = systray.AddMenuItem("Set up SplitWire (administrator)...", "Install SplitWire and its background service")
 	a.setupMI.Hide()
 	a.onClick(a.setupMI, gen, a.setup)
-	a.uninstallMI = systray.AddMenuItem("Uninstall splitwire...", "Remove everything splitwire installed")
+	a.uninstallMI = systray.AddMenuItem("Uninstall SplitWire...", "Remove everything SplitWire installed")
 	a.onClick(a.uninstallMI, gen, a.uninstall)
 	a.onClick(systray.AddMenuItem("Quit", "Close the app; running tunnels stay up"), gen, systray.Quit)
 
@@ -194,9 +194,9 @@ func (a *app) refreshLocked() {
 	icon, summary := "down", ""
 	switch a.link {
 	case linkConnecting:
-		summary = "Connecting to the splitwire manager..."
+		summary = "Connecting to the SplitWire manager..."
 	case linkMissing:
-		summary = "splitwire is not set up"
+		summary = "SplitWire is not set up"
 	case linkFailed:
 		icon, summary = "error", "Manager unavailable: "+truncate(a.linkErr, 60)
 	case linkConnected:
@@ -228,7 +228,7 @@ func (a *app) refreshLocked() {
 		}
 	}
 	systray.SetIcon(a.icons[icon])
-	systray.SetTooltip(truncate("splitwire: "+summary, 120))
+	systray.SetTooltip(truncate("SplitWire: "+summary, 120))
 	a.summaryMI.SetTitle(truncate(summary, 100))
 
 	vpnName, proxies := "", 0

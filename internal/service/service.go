@@ -73,7 +73,7 @@ func Install(confPath string) error {
 		StartType:    mgr.StartAutomatic,
 		ErrorControl: mgr.ErrorNormal,
 		Dependencies: []string{"Nsi", "TcpIp"},
-		DisplayName:  "splitwire tunnel: " + c.WG.Name,
+		DisplayName:  "SplitWire tunnel: " + c.WG.Name,
 		SidType:      windows.SERVICE_SID_TYPE_UNRESTRICTED,
 	}, RunCommand, stored)
 	if err != nil {

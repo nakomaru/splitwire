@@ -179,7 +179,7 @@ func newWindow(a *app) *window {
 		}
 		return 0, false
 	}
-	newForm(f, "splitwire", 0, wsOverlappedWindow, 920, 700)
+	newForm(f, "SplitWire", 0, wsOverlappedWindow, 920, 700)
 
 	w.list = f.addList(&control{itemHeight: 52, empty: "No tunnels yet. Add one below."}, 0)
 	w.list.drawItem = w.drawTunnel
@@ -582,9 +582,9 @@ func (w *window) update() {
 		hint := "Programs an app starts follow it."
 		w.appList.empty = "No apps yet."
 		if c.Mode == config.ModeFull {
-			w.appList.empty = "Every app uses this tunnel. To split it by app, pick one of the other two choices."
+			w.appList.empty = "Every app uses it as the VPN. To split it by app, pick one of the other two choices."
 			if len(c.Apps) > 0 {
-				hint = "Kept for the other two choices; every app uses the tunnel now."
+				hint = "Kept for the other two choices; every app uses it as the VPN now."
 			}
 		}
 		f.setText(w.appHint, hint)
@@ -639,11 +639,11 @@ func (r rect) empty() bool { return r.right <= r.left || r.bottom <= r.top }
 func (w *window) statusText(t *ipc.Tunnel, file tunnelFile) string {
 	switch w.snap.link {
 	case linkConnecting:
-		return "Connecting to the splitwire service..."
+		return "Connecting to the SplitWire service..."
 	case linkMissing:
-		return "splitwire is not set up. Set it up from the menu of its notification area icon."
+		return "SplitWire is not set up. Set it up from the menu of its notification area icon."
 	case linkFailed:
-		return "The splitwire service is unavailable: " + w.snap.linkErr
+		return "The SplitWire service is unavailable: " + w.snap.linkErr
 	}
 	if w.sel == "" {
 		return "Add a tunnel to get started."

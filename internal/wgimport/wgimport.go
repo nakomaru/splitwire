@@ -197,7 +197,7 @@ func runHelper(outDir string, names []string) error {
 		ServiceType:  windows.SERVICE_WIN32_OWN_PROCESS,
 		StartType:    mgr.StartManual,
 		ErrorControl: mgr.ErrorIgnore,
-		DisplayName:  "splitwire WireGuard import (temporary)",
+		DisplayName:  "SplitWire WireGuard import (temporary)",
 	}, args...)
 	if err != nil {
 		return fmt.Errorf("create %s service: %w", helperService, err)
