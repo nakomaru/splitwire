@@ -64,66 +64,75 @@ func bootOn() bool {
 // installPlan is what the install window decided.
 type installPlan struct {
 	args       []string // manager install arguments
+	startMenu  bool
 	signIn     bool
 	deleteSelf bool
 }
 
-// installWindow shows every install choice in one window, filled in from
-// the current state when updating. It reports false when canceled.
+// installWindow shows every install choice in one window, grouped and
+// filled in from the current state when updating. It reports false when
+// canceled.
 func installWindow(self, installed string, updating bool) (installPlan, bool) {
 	names, _ := userconf.Names()
 	type choice struct {
 		option
+		key     string // names the choices the app applies itself
 		on, off string // manager install flags for checked and unchecked
 	}
-	choices := []choice{
-		{option{
+	choices := []choice{{
+		option: option{
+			heading: "Install",
 			label:   "Add splitwire to the Start menu",
-			detail:  "For every user on this PC.",
+			detail:  "Your account only.",
 			checked: !updating || startMenuExists(),
-		}, "--start-menu", "--no-start-menu"},
-		{option: option{
-			label:   "Start splitwire at sign-in",
-			detail:  "Opens this app in the notification area.",
-			checked: !updating || runAtLogin(),
-		}},
-		{option{
-			label:   "Reconnect tunnels at boot",
-			detail:  "Brings back running tunnels before anyone signs in.",
-			checked: updating && bootOn(),
-		}, "--boot", "--no-boot"},
-	}
-	const signIn = 1
-	if !bootstrap.WireGuardNTInstalled() {
-		choices = append(choices, choice{option{
-			label:   "Install the WireGuard driver now",
-			detail:  "WireGuardNT from wireguard.com, which runs VPN tunnels.",
-			checked: true,
-		}, "--wireguard-driver", ""})
-	}
-	if !bootstrap.SplitDriverInstalled() {
-		choices = append(choices, choice{option{
-			label:   "Install the split tunnel driver now",
-			detail:  "Mullvad's open source driver from mullvad.net, for per-app tunnels.",
-			checked: true,
-		}, "--split-tunnel-driver", ""})
-	}
+		},
+		key: "startMenu",
+	}}
 	if wgimport.AppInstalled() {
-		choices = append(choices, choice{option{
+		choices = append(choices, choice{option: option{
 			label:   "Import tunnels from the WireGuard app",
 			detail:  `Copies them to %APPDATA%\splitwire. The app keeps its own.`,
 			checked: len(names) == 0,
-		}, "--import", ""})
+		}, on: "--import"})
 	}
-	deleteAt := -1
 	if !samePath(self, installed) {
-		deleteAt = len(choices)
 		choices = append(choices, choice{option: option{
 			label:   "Delete this file afterward",
 			detail:  self,
 			checked: true,
-		}})
+		}, key: "delete"})
 	}
+	heading := "Drivers"
+	if !bootstrap.WireGuardNTInstalled() {
+		choices = append(choices, choice{option: option{
+			heading: heading,
+			label:   "Install the WireGuard driver now",
+			detail:  "WireGuardNT from wireguard.com, which runs VPN tunnels.",
+			checked: true,
+		}, on: "--wireguard-driver"})
+		heading = ""
+	}
+	if !bootstrap.SplitDriverInstalled() {
+		choices = append(choices, choice{option: option{
+			heading: heading,
+			label:   "Install the split tunnel driver now",
+			detail:  "Mullvad's open source driver from mullvad.net, for per-app tunnels.",
+			checked: true,
+		}, on: "--split-tunnel-driver"})
+	}
+	choices = append(choices,
+		choice{option: option{
+			heading: "Startup",
+			label:   "Start splitwire at sign-in",
+			detail:  "Opens this app in the notification area.",
+			checked: !updating || runAtLogin(),
+		}, key: "signIn"},
+		choice{option: option{
+			label:   "Reconnect tunnels at boot",
+			detail:  "Brings back running tunnels before anyone signs in.",
+			checked: updating && bootOn(),
+		}, on: "--boot", off: "--no-boot"},
+	)
 
 	title, button := "Install splitwire", "Install"
 	intro := "Installs splitwire into Program Files with a background service, so tunnels " +
@@ -141,8 +150,16 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 	if !ok {
 		return installPlan{}, false
 	}
-	plan := installPlan{args: []string{"manager", "install"}, signIn: states[signIn]}
+	plan := installPlan{args: []string{"manager", "install"}}
 	for i, c := range choices {
+		switch c.key {
+		case "startMenu":
+			plan.startMenu = states[i]
+		case "signIn":
+			plan.signIn = states[i]
+		case "delete":
+			plan.deleteSelf = states[i]
+		}
 		switch {
 		case states[i] && c.on != "":
 			plan.args = append(plan.args, c.on)
@@ -150,20 +167,43 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 			plan.args = append(plan.args, c.off)
 		}
 	}
-	plan.deleteSelf = deleteAt >= 0 && states[deleteAt]
 	return plan, true
 }
 
-// install runs the plan: the elevated manager install, then the sign-in
-// entry. It reports whether the install succeeded.
+// install runs the plan: the elevated manager install, then the Start
+// menu shortcut and sign-in entry, which belong to the user. It reports
+// whether the install succeeded.
 func (p installPlan) install(self string) bool {
 	if !runElevated(self, p.args...) {
 		return false
+	}
+	if err := setStartMenu(p.startMenu); err != nil {
+		errorBox("Could not change the Start menu shortcut:\n\n%v", err)
 	}
 	if err := setRunAtLogin(p.signIn); err != nil {
 		errorBox("Could not change start at sign-in:\n\n%v", err)
 	}
 	return true
+}
+
+// setStartMenu adds the installed app to the user's Start menu, or removes
+// it.
+func setStartMenu(on bool) error {
+	lnk, err := shortcut.StartMenu(StartMenuName)
+	if err != nil {
+		return err
+	}
+	if !on {
+		if err := os.Remove(lnk); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	installed, err := installedExe()
+	if err != nil {
+		return err
+	}
+	return shortcut.Create(lnk, installed, Command, "WireGuard with per-app split tunneling")
 }
 
 // handOver runs the installed copy instead of this one, offering to update
@@ -237,8 +277,15 @@ func (a *app) install() bool {
 
 func (a *app) uninstall() {
 	opts := []option{{
-		label:  "Delete my tunnel configurations",
-		detail: `%APPDATA%\splitwire, including your private keys.`,
+		heading: "Your files",
+		label:   "Delete my tunnel configurations",
+		detail:  `%APPDATA%\splitwire, including your private keys.`,
+	}, {
+		heading:  "Drivers",
+		label:    "Remove the split tunnel driver",
+		detail:   "Always removed. A copy from the Mullvad app stays.",
+		checked:  true,
+		disabled: true,
 	}}
 	if wgimport.AppInstalled() {
 		opts = append(opts, option{
@@ -254,22 +301,23 @@ func (a *app) uninstall() {
 		})
 	}
 	states, ok := askOptions("Uninstall splitwire",
-		"Disconnects every tunnel and removes splitwire, its service, the split tunnel "+
-			"driver and its firewall entries.",
+		"Disconnects every tunnel and removes splitwire, its service and its firewall entries.",
 		opts, "Uninstall")
 	if !ok {
 		return
 	}
+	const configs, wireguardNT = 0, 2
 	args := []string{"cleanup"}
-	if states[0] {
+	if states[configs] {
 		args = append(args, "--configs")
 	}
-	if !states[1] {
+	if !states[wireguardNT] {
 		args = append(args, "--keep-wireguardnt")
 	}
 	if !runElevated(selfExe(), args...) {
 		return
 	}
+	setStartMenu(false)
 	setRunAtLogin(false)
 	systray.Quit()
 }

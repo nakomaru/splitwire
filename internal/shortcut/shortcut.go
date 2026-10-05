@@ -100,9 +100,18 @@ func Create(path, target, args, description string) error {
 	return call(file, slotSave, uintptr(unsafe.Pointer(pPath)), 1)
 }
 
-// StartMenu is the shortcut's path in the Start menu of every user.
+// StartMenu is the shortcut's path in the current user's Start menu.
 func StartMenu(name string) (string, error) {
-	dir, err := windows.KnownFolderPath(windows.FOLDERID_CommonPrograms, 0)
+	return inFolder(windows.FOLDERID_Programs, name)
+}
+
+// CommonStartMenu is the shortcut's path in the Start menu of every user.
+func CommonStartMenu(name string) (string, error) {
+	return inFolder(windows.FOLDERID_CommonPrograms, name)
+}
+
+func inFolder(folder *windows.KNOWNFOLDERID, name string) (string, error) {
+	dir, err := windows.KnownFolderPath(folder, 0)
 	if err != nil {
 		return "", err
 	}

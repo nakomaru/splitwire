@@ -48,6 +48,8 @@ var (
 	procDrawTextW               = user32.NewProc("DrawTextW")
 	procSelectObject            = gdi32.NewProc("SelectObject")
 	procIsWindowEnabled         = user32.NewProc("IsWindowEnabled")
+	procGetObjectW              = gdi32.NewProc("GetObjectW")
+	procCreateFontIndirectW     = gdi32.NewProc("CreateFontIndirectW")
 )
 
 // Window messages, styles and system values the dialogs use.
@@ -86,6 +88,7 @@ const (
 	classStatic      = 0x0082
 	ssNoPrefix       = 0x0080
 	wmGetFont        = 0x0031
+	wmSetFont        = 0x0030
 	dtCalcRect       = 0x0400
 	dtWordBreak      = 0x0010
 	dtNoPrefix       = 0x0800
@@ -96,13 +99,14 @@ const (
 
 // Control IDs.
 const (
-	idOK          = 1
-	idCancel      = 2
-	idIntro       = 99
-	idEdit        = 100
-	idFirstCheck  = 200 // checkbox of option i is idFirstCheck+i
-	idFirstDetail = 300 // its description is idFirstDetail+i
-	idFirstLabel  = 400 // its label is idFirstLabel+i
+	idOK           = 1
+	idCancel       = 2
+	idIntro        = 99
+	idEdit         = 100
+	idFirstCheck   = 200 // checkbox of option i is idFirstCheck+i
+	idFirstDetail  = 300 // its description is idFirstDetail+i
+	idFirstLabel   = 400 // its label is idFirstLabel+i
+	idFirstHeading = 500 // the heading above it is idFirstHeading+i
 )
 
 // Layout in dialog units.
@@ -229,6 +233,29 @@ type dialogSpec struct {
 	palette   palette
 	brushes   brushes
 	footerTop int32
+	headFont  uintptr
+}
+
+// logFont is LOGFONTW.
+type logFont struct {
+	height, width, escapement, orientation, weight int32
+	italic, underline, strikeOut, charSet          byte
+	outPrecision, clipPrecision, quality, pitch    byte
+	faceName                                       [32]uint16
+}
+
+// semibold returns the dialog's font in semibold, made once per dialog.
+func (d *dialogSpec) semibold(hwnd uintptr) uintptr {
+	if d.headFont != 0 {
+		return d.headFont
+	}
+	font, _, _ := procSendMessageW.Call(hwnd, wmGetFont, 0, 0)
+	var lf logFont
+	procGetObjectW.Call(font, unsafe.Sizeof(lf), uintptr(unsafe.Pointer(&lf)))
+	const fwSemibold = 600
+	lf.weight = fwSemibold
+	d.headFont, _, _ = procCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
+	return d.headFont
 }
 
 var (
@@ -246,6 +273,11 @@ func runDialog(t *dlgTemplate, spec *dialogSpec) bool {
 	spec.palette = currentPalette()
 	spec.brushes = newBrushes(spec.palette)
 	defer spec.brushes.free()
+	defer func() {
+		if spec.headFont != 0 {
+			procDeleteObject.Call(spec.headFont)
+		}
+	}()
 	openDialog = spec
 	var instance windows.Handle
 	windows.GetModuleHandleEx(0, nil, &instance)
@@ -487,6 +519,8 @@ type option struct {
 	checked       bool
 	// disabled shows the option without letting it change.
 	disabled bool
+	// heading starts a group of options under a semibold title.
+	heading string
 }
 
 // askOptions shows intro, a checkbox for each option, and the OK button
@@ -499,6 +533,9 @@ func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 	type placed struct{ y, detailHeight int }
 	var at []placed
 	for _, o := range opts {
+		if o.heading != "" {
+			y += lineHeight + 6
+		}
 		h := 0
 		if o.detail != "" {
 			h = lines(o.detail, detailCharsPerLine) * detailLine
@@ -511,6 +548,9 @@ func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 	t.control(classStatic, idIntro, ssNoPrefix, dialogMargin, dialogMargin, contentWidth, introHeight, intro)
 	textX, textW := dialogMargin+detailIndent, contentWidth-detailIndent
 	for i, o := range opts {
+		if o.heading != "" {
+			t.control(classStatic, uint16(idFirstHeading+i), ssNoPrefix, dialogMargin, at[i].y-lineHeight-4, contentWidth, lineHeight, o.heading)
+		}
 		t.control(classButton, uint16(idFirstCheck+i), wsTabStop|bsAutoCheckBox, dialogMargin, at[i].y, checkboxBox, checkboxHeight, "")
 		t.control(classStatic, uint16(idFirstLabel+i), ssNoPrefix|ssNotify, textX, at[i].y, textW, checkboxHeight, o.label)
 		if o.detail != "" {
@@ -526,6 +566,13 @@ func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 		ids := []uintptr{idOK, idCancel}
 		rows := []row{{id: idIntro, text: intro}}
 		for i, o := range opts {
+			gap := 8
+			if o.heading != "" {
+				heading := item(idFirstHeading + i)
+				procSendMessageW.Call(heading, wmSetFont, spec.semibold(hwnd), 0)
+				rows = append(rows, row{id: uint16(idFirstHeading + i), gap: 12, text: o.heading})
+				gap = 4
+			}
 			box, label := item(idFirstCheck+i), item(idFirstLabel+i)
 			ids = append(ids, uintptr(idFirstCheck+i))
 			spec.labels[label] = box
@@ -537,7 +584,7 @@ func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 				spec.subtle[label] = true
 			}
 			rows = append(rows,
-				row{id: uint16(idFirstCheck + i), gap: 8},
+				row{id: uint16(idFirstCheck + i), gap: gap},
 				row{id: uint16(idFirstLabel + i), text: o.label, sameRow: true})
 			if o.detail != "" {
 				spec.subtle[item(idFirstDetail+i)] = true

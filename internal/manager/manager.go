@@ -51,9 +51,6 @@ const (
 
 // Options are the choices of a manager install.
 type Options struct {
-	// StartMenu adds or removes the Start menu shortcut. Kept, an existing
-	// shortcut is rewritten.
-	StartMenu Choice
 	// Boot turns bringing running tunnels back up at boot on, keeping a
 	// list of boot tunnels that exists already, or off.
 	Boot Choice
@@ -76,20 +73,10 @@ func Install(opts Options) error {
 		return err
 	}
 	bootstrap.RemoveLegacyTray()
-	if lnk, err := shortcut.StartMenu(tray.StartMenuName); err == nil {
-		_, statErr := os.Stat(lnk)
-		switch {
-		case opts.StartMenu == Off:
-			if statErr == nil {
-				os.Remove(lnk)
-				log.Printf("Removed the Start menu shortcut")
-			}
-		case opts.StartMenu == On || statErr == nil:
-			if err := shortcut.Create(lnk, exe, tray.Command, "WireGuard with per-app split tunneling"); err != nil {
-				log.Printf("Warning: Start menu shortcut: %v", err)
-			} else {
-				log.Printf("Start menu shortcut: %s", lnk)
-			}
+	// The app keeps its shortcut in the user's own Start menu.
+	if lnk, err := shortcut.CommonStartMenu(tray.StartMenuName); err == nil {
+		if os.Remove(lnk) == nil {
+			log.Printf("Removed the all-users Start menu shortcut")
 		}
 	}
 	if dir, err := bootstrap.ConfigsDir(); err == nil && opts.Boot != Keep {

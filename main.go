@@ -63,9 +63,8 @@ Usage:
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll, the WireGuardNT and split tunnel drivers
   splitwire manager install [options]   Set up the service the notification area app uses:
-                                        --start-menu or --no-start-menu adds or removes the Start
-                                        menu shortcut, --boot or --no-boot turns reconnecting
-                                        tunnels at boot on or off, --wireguard-driver and
+                                        --boot or --no-boot turns reconnecting tunnels at boot on
+                                        or off, --wireguard-driver and
                                         --split-tunnel-driver install those drivers now, --import
                                         imports from the WireGuard app; "manager uninstall"
                                         removes the service
@@ -144,7 +143,7 @@ func runTray(args []string) {
 
 // Flags of manager install and cleanup.
 var (
-	installFlags = []string{"--start-menu", "--no-start-menu", "--boot", "--no-boot", "--wireguard-driver", "--split-tunnel-driver", "--import"}
+	installFlags = []string{"--boot", "--no-boot", "--wireguard-driver", "--split-tunnel-driver", "--import"}
 	cleanupFlags = []string{"--configs", "--keep-wireguardnt"}
 )
 
@@ -339,8 +338,7 @@ func run(args []string) error {
 		if args[1] == "install" {
 			flags := args[2:]
 			err := manager.Install(manager.Options{
-				StartMenu: choice(flags, "--start-menu", "--no-start-menu"),
-				Boot:      choice(flags, "--boot", "--no-boot"),
+				Boot: choice(flags, "--boot", "--no-boot"),
 			})
 			if err != nil {
 				return err
@@ -761,9 +759,9 @@ func cleanup(configs, wireguardNT bool) error {
 		log.Printf("Removed %s", root)
 	}
 
-	if lnk, err := shortcut.StartMenu(tray.StartMenuName); err == nil {
-		if err := os.Remove(lnk); err == nil {
-			log.Printf("Removed the Start menu shortcut")
+	for _, where := range []func(string) (string, error){shortcut.StartMenu, shortcut.CommonStartMenu} {
+		if lnk, err := where(tray.StartMenuName); err == nil && os.Remove(lnk) == nil {
+			log.Printf("Removed the Start menu shortcut %s", lnk)
 		}
 	}
 	if err := tray.RemoveRunAtLogin(); err != nil {
