@@ -19,6 +19,8 @@ import (
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/elevate"
+	"splitwire/internal/ipc"
+	"splitwire/internal/svcwait"
 )
 
 // Command is the CLI command that starts the tray app.
@@ -40,6 +42,7 @@ const deleteFlag = "--delete-setup"
 // Run starts the tray app. A copy run from outside the install root hands
 // over to the installed copy, updating it first when the two differ.
 func Run(args []string) error {
+	followSystemTheme()
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -48,10 +51,10 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !samePath(self, installed) {
-		if _, err := os.Stat(installed); err == nil {
-			return handOver(self, installed)
-		}
+	// An installed copy without the manager service is one an uninstall
+	// left for deletion at the next restart.
+	if !samePath(self, installed) && fileExists(installed) && svcwait.Exists(ipc.ServiceName) {
+		return handOver(self, installed)
 	}
 	if len(args) == 3 && args[0] == deleteFlag {
 		if pid, err := strconv.ParseUint(args[2], 10, 32); err == nil {

@@ -45,7 +45,7 @@ import (
 	"splitwire/internal/wgimport"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 const usage = `splitwire ` + version + ` - WireGuard with per-app split tunneling
 
@@ -63,9 +63,11 @@ Usage:
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
   splitwire manager install [options]   Set up the service the notification area app uses:
-                                        --start-menu adds a Start menu shortcut, --boot turns on
-                                        reconnecting tunnels at boot, --import imports from the
-                                        WireGuard app; "manager uninstall" removes the service
+                                        --start-menu or --no-start-menu adds or removes the Start
+                                        menu shortcut, --boot or --no-boot turns reconnecting
+                                        tunnels at boot on or off, --drivers installs the drivers
+                                        now, --import imports from the WireGuard app;
+                                        "manager uninstall" removes the service
   splitwire cleanup [options]           Uninstall everything; --configs also deletes your tunnel
                                         files, --keep-wireguardnt keeps the WireGuardNT driver
   splitwire version
@@ -141,7 +143,7 @@ func runTray(args []string) {
 
 // Flags of manager install and cleanup.
 var (
-	installFlags = []string{"--start-menu", "--boot", "--import"}
+	installFlags = []string{"--start-menu", "--no-start-menu", "--boot", "--no-boot", "--drivers", "--import"}
 	cleanupFlags = []string{"--configs", "--keep-wireguardnt"}
 )
 
@@ -153,6 +155,17 @@ func onlyFlags(args []string, allowed ...string) bool {
 		}
 	}
 	return true
+}
+
+// choice reads a pair of opposite flags.
+func choice(args []string, on, off string) manager.Choice {
+	switch {
+	case hasFlag(args, on):
+		return manager.On
+	case hasFlag(args, off):
+		return manager.Off
+	}
+	return manager.Keep
 }
 
 func hasFlag(args []string, flag string) bool {
@@ -325,13 +338,25 @@ func run(args []string) error {
 		if args[1] == "install" {
 			flags := args[2:]
 			err := manager.Install(manager.Options{
-				StartMenu: hasFlag(flags, "--start-menu"),
-				Boot:      hasFlag(flags, "--boot"),
+				StartMenu: choice(flags, "--start-menu", "--no-start-menu"),
+				Boot:      choice(flags, "--boot", "--no-boot"),
 			})
-			if err != nil || !hasFlag(flags, "--import") {
+			if err != nil {
 				return err
 			}
-			return importTunnels(nil)
+			// The drivers install on demand and tunnels import later, so
+			// failures here leave the install standing.
+			if hasFlag(flags, "--drivers") {
+				if err := bootstrapAll(); err != nil {
+					log.Printf("Warning: drivers: %v; they install when a tunnel first needs them", err)
+				}
+			}
+			if hasFlag(flags, "--import") {
+				if err := importTunnels(nil); err != nil {
+					log.Printf("Warning: import: %v", err)
+				}
+			}
+			return nil
 		}
 		return manager.Uninstall()
 	case "bootstrap":
@@ -720,7 +745,7 @@ func cleanup(configs, wireguardNT bool) error {
 		log.Printf("Removed %s", root)
 	}
 
-	if lnk, err := shortcut.StartMenu(manager.StartMenuName); err == nil {
+	if lnk, err := shortcut.StartMenu(tray.StartMenuName); err == nil {
 		if err := os.Remove(lnk); err == nil {
 			log.Printf("Removed the Start menu shortcut")
 		}

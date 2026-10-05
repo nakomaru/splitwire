@@ -24,9 +24,6 @@ import (
 // ServiceName is the manager service.
 const ServiceName = ipc.ServiceName
 
-// StartMenuName names the Start menu shortcut to the app.
-const StartMenuName = "splitwire"
-
 // RunCommand is the hidden CLI command the service executes.
 const RunCommand = "manager-run"
 
@@ -43,20 +40,34 @@ const (
 	legacyBootConf = "autostart.conf"
 )
 
+// Choice is an install setting: kept as it is, turned on or turned off.
+type Choice int
+
+const (
+	Keep Choice = iota
+	On
+	Off
+)
+
 // Options are the choices of a manager install.
 type Options struct {
-	// StartMenu adds the Start menu shortcut. An existing shortcut is
-	// rewritten either way.
-	StartMenu bool
-	// Boot turns on bringing running tunnels back up at boot, unless a
-	// list of boot tunnels exists already.
-	Boot bool
+	// StartMenu adds or removes the Start menu shortcut. Kept, an existing
+	// shortcut is rewritten.
+	StartMenu Choice
+	// Boot turns bringing running tunnels back up at boot on, keeping a
+	// list of boot tunnels that exists already, or off.
+	Boot Choice
 }
 
 // Install copies the executable into the install root and registers and
 // starts the manager service for the calling user. Installing again
 // updates the executable and restarts the service.
 func Install(opts Options) error {
+	if n, err := bootstrap.CancelPendingDeletes(); err != nil {
+		log.Printf("Warning: cancel deletions left by an uninstall: %v", err)
+	} else if n > 0 {
+		log.Printf("Canceled %d deletions an uninstall left for the next restart", n)
+	}
 	if err := bootstrap.EnsureDirs(); err != nil {
 		return err
 	}
@@ -65,9 +76,15 @@ func Install(opts Options) error {
 		return err
 	}
 	bootstrap.RemoveLegacyTray()
-	if lnk, err := shortcut.StartMenu(StartMenuName); err == nil {
+	if lnk, err := shortcut.StartMenu(tray.StartMenuName); err == nil {
 		_, statErr := os.Stat(lnk)
-		if opts.StartMenu || statErr == nil {
+		switch {
+		case opts.StartMenu == Off:
+			if statErr == nil {
+				os.Remove(lnk)
+				log.Printf("Removed the Start menu shortcut")
+			}
+		case opts.StartMenu == On || statErr == nil:
 			if err := shortcut.Create(lnk, exe, tray.Command, "WireGuard with per-app split tunneling"); err != nil {
 				log.Printf("Warning: Start menu shortcut: %v", err)
 			} else {
@@ -75,14 +92,16 @@ func Install(opts Options) error {
 			}
 		}
 	}
-	if opts.Boot {
-		if dir, err := bootstrap.ConfigsDir(); err == nil {
-			path := filepath.Join(dir, bootFile)
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				if err := writeBoot(path, nil); err != nil {
-					log.Printf("Warning: turn on boot start: %v", err)
-				}
+	if dir, err := bootstrap.ConfigsDir(); err == nil && opts.Boot != Keep {
+		path := filepath.Join(dir, bootFile)
+		_, statErr := os.Stat(path)
+		switch {
+		case opts.Boot == On && os.IsNotExist(statErr):
+			if err := writeBoot(path, nil); err != nil {
+				log.Printf("Warning: turn on reconnecting at boot: %v", err)
 			}
+		case opts.Boot == Off && statErr == nil:
+			os.Remove(path)
 		}
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()

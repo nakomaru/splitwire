@@ -87,24 +87,32 @@ Show manager log, Uninstall splitwire..., Quit
 - **Uninstall splitwire...** removes everything, as `splitwire cleanup`
   below, and asks whether to delete your tunnel configurations too.
 
-The first run opens one setup window with a checkbox and a description
+The first run opens the install window: one checkbox with a description
 for each choice, and an Install button that asks for administrator rights
-once:
+once.
 
-- **Add splitwire to the Start menu** (on): a shortcut for every user.
-- **Start splitwire at sign-in** (on).
-- **Reconnect tunnels at boot** (off): the menu changes it later.
+- **Add splitwire to the Start menu**: a shortcut for every user.
+- **Start splitwire at sign-in**.
+- **Reconnect tunnels at boot**: the menu changes it later too.
+- **Install the split tunnel driver now**, while it is not installed:
+  otherwise it installs when an include or exclude tunnel first connects.
 - **Import tunnels from the WireGuard app**, when that app is installed (on
   while `%APPDATA%\splitwire` holds no tunnels).
-- **Delete this setup file afterward** (on), when run from outside Program
-  Files: the installed copy deletes the file once the setup process has
-  exited, and only when it is identical to the installed executable.
+- **Delete this file afterward**, when run from outside Program Files: the
+  installed copy deletes the file once the setup process has exited, and
+  only when it is identical to the installed executable.
 
 Setup copies the executable to `%ProgramFiles%\splitwire\bin`, installs the
 manager service and switches to the installed copy. Double-clicking a
-different `splitwire.exe` later opens an update window that shows both
-versions, with the same option to delete that file; an identical copy
-opens the installed app.
+different `splitwire.exe` later opens the same window as an update, with
+both versions in its text and each choice set to its current state, so an
+update can change them too; an identical copy opens the installed app.
+Installing cancels deletions that an earlier uninstall left for the next
+restart, so a reinstall before restarting stays.
+
+The dialogs and the notification area menu follow the Windows light or
+dark mode, in the colors of Windows 11 dialogs, with the primary button in
+the system accent color. High contrast themes keep the system colors.
 
 The manager service runs as SYSTEM and does the privileged work; the app
 runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
@@ -194,7 +202,9 @@ Everything lives in `%ProgramFiles%\splitwire`:
   (version 1.3.0.0), pinned by SHA-256. It is read straight out of the
   Mullvad VPN 2026.5 installer on cdn.mullvad.net with HTTP range requests,
   which downloads about 256 KiB of the 134 MB file. It runs as the
-  demand-start kernel service `mullvad-split-tunnel`.
+  demand-start kernel service `mullvad-split-tunnel`. When the Mullvad VPN
+  app has installed that service, splitwire uses it as the app left it,
+  while the Mullvad daemon is stopped, and never changes or removes it.
 - `bin\splitwire.exe`, `configs\`, `logs\`: the installed app, which the
   services run, and the services' configuration copies and logs. `configs`
   and `logs` are readable only by SYSTEM and Administrators.
@@ -208,7 +218,8 @@ the WireGuard app is installed).
 
 - the manager service, every `splitwire$<name>` tunnel service and a
   leftover `splitwire-wg-import` service
-- the `mullvad-split-tunnel` driver service, after resetting the driver
+- the `mullvad-split-tunnel` driver service, after resetting the driver,
+  when it runs splitwire's copy; the Mullvad VPN app's stays
 - the splitwire firewall provider and sublayers
 - the WireGuardNT driver, unless the WireGuard app is installed and uses it
   or `--keep-wireguardnt` is given

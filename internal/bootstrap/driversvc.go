@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,10 +22,24 @@ const MullvadDaemonService = "MullvadVPN"
 // ntPath turns a Win32 path into the \??\ form that kernel driver services use.
 func ntPath(p string) string { return `\??\` + p }
 
-func sameImagePath(configured, want string) bool {
+// imageFile turns a driver service's image path into a file path. Kernel
+// services name it as \??\C:\..., \SystemRoot\... or relative to the
+// Windows folder.
+func imageFile(configured string) string {
 	c := strings.Trim(configured, `"`)
 	c = strings.TrimPrefix(c, `\??\`)
-	return strings.EqualFold(c, want)
+	root := os.Getenv("SystemRoot")
+	switch {
+	case len(c) > 12 && strings.EqualFold(c[:12], `\SystemRoot\`):
+		return filepath.Join(root, c[12:])
+	case !filepath.IsAbs(c):
+		return filepath.Join(root, c)
+	}
+	return c
+}
+
+func sameImagePath(configured, want string) bool {
+	return strings.EqualFold(filepath.Clean(imageFile(configured)), filepath.Clean(want))
 }
 
 // MullvadRunning reports whether the Mullvad daemon service is running.
@@ -38,8 +54,9 @@ func MullvadRunning(m *mgr.Mgr) bool {
 }
 
 // EnsureDriverService registers the driver as a demand-start kernel service
-// pointing at sysPath and starts it. A service left by the Mullvad app is
-// repointed when the Mullvad daemon is not running.
+// pointing at sysPath and starts it. A service the Mullvad app installed
+// runs as it is, never changed, while the Mullvad daemon is stopped; one
+// whose driver file is gone is repointed at sysPath.
 func EnsureDriverService(sysPath string) error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -68,6 +85,17 @@ func EnsureDriverService(sysPath string) error {
 		if MullvadRunning(m) {
 			return fmt.Errorf("the Mullvad VPN service is running and owns the split tunnel driver; stop it with `sc.exe stop %s`", MullvadDaemonService)
 		}
+		if other := imageFile(cfg.BinaryPathName); fileExists(other) {
+			log.Printf("Using the Mullvad app's split tunnel driver service, which runs %s", other)
+			if st.State == svc.Running {
+				return nil
+			}
+			if err := s.Start(); err != nil && !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+				return fmt.Errorf("start %s driver: %w", stdriver.ServiceName, err)
+			}
+			return waitState(s, svc.Running)
+		}
+		log.Printf("Driver service %s points at the missing %s; repointing it", stdriver.ServiceName, cfg.BinaryPathName)
 		if st.State == svc.Running {
 			log.Printf("Driver service runs %s; restarting it from %s", cfg.BinaryPathName, sysPath)
 			if err := stopService(s); err != nil {
@@ -113,6 +141,11 @@ func createDriverService(m *mgr.Mgr, sysPath string) (*mgr.Service, error) {
 	}
 	log.Printf("Registered driver service %s", stdriver.ServiceName)
 	return &mgr.Service{Name: stdriver.ServiceName, Handle: h}, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func stopService(s *mgr.Service) error {
@@ -167,12 +200,18 @@ func RemoveDriverService() error {
 		log.Printf("Leaving driver service %s in place; it runs %s", stdriver.ServiceName, cfg.BinaryPathName)
 		return nil
 	}
+	stopped := true
 	if err := stopService(s); err != nil {
-		return err
+		log.Printf("Warning: %v; the driver stays loaded until the next restart", err)
+		stopped = false
 	}
 	if err := s.Delete(); err != nil {
 		return fmt.Errorf("delete %s service: %w", stdriver.ServiceName, err)
 	}
-	log.Printf("Removed driver service %s", stdriver.ServiceName)
+	if stopped {
+		log.Printf("Removed driver service %s", stdriver.ServiceName)
+	} else {
+		log.Printf("Driver service %s goes at the next restart", stdriver.ServiceName)
+	}
 	return nil
 }

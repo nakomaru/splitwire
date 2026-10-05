@@ -26,7 +26,6 @@ var (
 	procGetDlgCtrlID            = user32.NewProc("GetDlgCtrlID")
 	procEnableWindow            = user32.NewProc("EnableWindow")
 	procGetSysColor             = user32.NewProc("GetSysColor")
-	procGetSysColorBrush        = user32.NewProc("GetSysColorBrush")
 	procSetTextColor            = gdi32.NewProc("SetTextColor")
 	procSetBkMode               = gdi32.NewProc("SetBkMode")
 	procOpenClipboard           = user32.NewProc("OpenClipboard")
@@ -48,6 +47,7 @@ var (
 	procReleaseDC               = user32.NewProc("ReleaseDC")
 	procDrawTextW               = user32.NewProc("DrawTextW")
 	procSelectObject            = gdi32.NewProc("SelectObject")
+	procIsWindowEnabled         = user32.NewProc("IsWindowEnabled")
 )
 
 // Window messages, styles and system values the dialogs use.
@@ -55,10 +55,16 @@ const (
 	wmInitDialog     = 0x0110
 	wmCommand        = 0x0111
 	wmCtlColorStatic = 0x0138
+	wmCtlColorDlg    = 0x0136
+	wmCtlColorEdit   = 0x0133
+	wmCtlColorBtn    = 0x0135
+	wmEraseBkgnd     = 0x0014
+	bmClick          = 0x00F5
+	ssNotify         = 0x0100
+	stnClicked       = 0
+	stnDblClk        = 1
 	emLimitText      = 0x00C5
 	bstChecked       = 1
-	colorBtnFace     = 15
-	colorGrayText    = 17
 	bkTransparent    = 1
 	dsSetFont        = 0x40
 	dsModalFrame     = 0x80
@@ -69,7 +75,7 @@ const (
 	wsSysMenu        = 0x00080000
 	wsChild          = 0x40000000
 	wsVisible        = 0x10000000
-	wsBorder         = 0x00800000
+	wsExClientEdge   = 0x00000200
 	wsTabStop        = 0x00010000
 	esAutoHScroll    = 0x0080
 	esNumber         = 0x2000
@@ -95,8 +101,8 @@ const (
 	idIntro       = 99
 	idEdit        = 100
 	idFirstCheck  = 200 // checkbox of option i is idFirstCheck+i
-	idFirstDetail = 300 // its gray description is idFirstDetail+i
-	maxOptions    = 100
+	idFirstDetail = 300 // its description is idFirstDetail+i
+	idFirstLabel  = 400 // its label is idFirstLabel+i
 )
 
 // Layout in dialog units.
@@ -107,6 +113,8 @@ const (
 	lineHeight     = 9
 	detailLine     = 8
 	checkboxHeight = 10
+	checkboxBox    = 10 // the checkbox control without its label
+	footerPad      = 7  // between the footer's edges and its buttons
 	detailIndent   = 12
 	buttonWidth    = 50
 	buttonHeight   = 14
@@ -155,9 +163,13 @@ func newTemplate(title string, height int) *dlgTemplate {
 }
 
 func (t *dlgTemplate) control(class, id uint16, style uint32, x, y, cx, cy int, text string) {
+	t.controlEx(class, id, style, 0, x, y, cx, cy, text)
+}
+
+func (t *dlgTemplate) controlEx(class, id uint16, style, exStyle uint32, x, y, cx, cy int, text string) {
 	t.align()
 	t.dword(style | wsChild | wsVisible)
-	t.dword(0)
+	t.dword(exStyle)
 	for _, v := range []int{x, y, cx, cy} {
 		t.word(uint16(v))
 	}
@@ -170,11 +182,16 @@ func (t *dlgTemplate) control(class, id uint16, style uint32, x, y, cx, cy int, 
 	t.w[countSlot] = uint16(t.count)
 }
 
-// buttons adds the OK button, labeled ok, and Cancel at the bottom right.
+// buttons adds the OK button, labeled ok, and Cancel at the bottom right,
+// drawn by drawButton unless the system draws them.
 func (t *dlgTemplate) buttons(y int, ok string) {
 	right := dialogWidth - dialogMargin
-	t.control(classButton, idOK, wsTabStop|bsDefPushButton, right-2*buttonWidth-4, y, buttonWidth, buttonHeight, ok)
-	t.control(classButton, idCancel, wsTabStop, right-buttonWidth, y, buttonWidth, buttonHeight, "Cancel")
+	okStyle, cancelStyle := uint32(bsDefPushButton), uint32(0)
+	if ownerDrawButtons() {
+		okStyle, cancelStyle = bsOwnerDraw, bsOwnerDraw
+	}
+	t.control(classButton, idOK, wsTabStop|okStyle, right-2*buttonWidth-4, y, buttonWidth, buttonHeight, ok)
+	t.control(classButton, idCancel, wsTabStop|cancelStyle, right-buttonWidth, y, buttonWidth, buttonHeight, "Cancel")
 }
 
 // lines estimates how many lines text wraps to at width characters. The
@@ -204,6 +221,14 @@ type dialogSpec struct {
 	init func(hwnd uintptr)
 	// ok reads the dialog when OK is pressed; false keeps it open.
 	ok func(hwnd uintptr) bool
+	// subtle lists the static controls drawn in the secondary text color.
+	subtle map[uintptr]bool
+	// labels maps clickable labels to the checkboxes they toggle.
+	labels map[uintptr]uintptr
+
+	palette   palette
+	brushes   brushes
+	footerTop int32
 }
 
 var (
@@ -218,6 +243,9 @@ func runDialog(t *dlgTemplate, spec *dialogSpec) bool {
 	defer dialogMu.Unlock()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	spec.palette = currentPalette()
+	spec.brushes = newBrushes(spec.palette)
+	defer spec.brushes.free()
 	openDialog = spec
 	var instance windows.Handle
 	windows.GetModuleHandleEx(0, nil, &instance)
@@ -226,25 +254,76 @@ func runDialog(t *dlgTemplate, spec *dialogSpec) bool {
 	return r == idOK
 }
 
+// themeControls applies the visual style matching the palette to the
+// dialog's buttons, checkboxes and edit box.
+func themeControls(hwnd uintptr, p palette, ids []uintptr) {
+	themeWindow(hwnd, p)
+	for _, id := range ids {
+		ctrl, _, _ := procGetDlgItem.Call(hwnd, id)
+		if ctrl == 0 {
+			continue
+		}
+		if id == idEdit {
+			themeControl(ctrl, p, "CFD")
+		} else {
+			themeControl(ctrl, p, "Explorer")
+		}
+	}
+}
+
 func dialogProcFunc(hwnd, msg, wparam, lparam uintptr) uintptr {
+	d := openDialog
 	switch msg {
 	case wmInitDialog:
-		if openDialog.init != nil {
-			openDialog.init(hwnd)
+		if d.init != nil {
+			d.init(hwnd)
 		}
 		return 1
+	case wmEraseBkgnd:
+		var r rect
+		procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+		content, footer := r, r
+		content.bottom, footer.top = d.footerTop, d.footerTop
+		procFillRect.Call(wparam, uintptr(unsafe.Pointer(&content)), d.brushes.content)
+		procFillRect.Call(wparam, uintptr(unsafe.Pointer(&footer)), d.brushes.footer)
+		return 1
+	case wmCtlColorDlg:
+		return d.brushes.content
 	case wmCtlColorStatic:
-		if id, _, _ := procGetDlgCtrlID.Call(lparam); id >= idFirstDetail && id < idFirstDetail+maxOptions {
-			c, _, _ := procGetSysColor.Call(colorGrayText)
-			procSetTextColor.Call(wparam, c)
-			procSetBkMode.Call(wparam, bkTransparent)
-			brush, _, _ := procGetSysColorBrush.Call(colorBtnFace)
-			return brush
+		color := d.palette.text
+		if d.subtle[lparam] {
+			color = d.palette.subtext
+		}
+		procSetTextColor.Call(wparam, uintptr(color))
+		procSetBkColor.Call(wparam, uintptr(d.palette.content))
+		procSetBkMode.Call(wparam, bkTransparent)
+		return d.brushes.content
+	case wmCtlColorEdit:
+		procSetTextColor.Call(wparam, uintptr(d.palette.text))
+		procSetBkColor.Call(wparam, uintptr(d.palette.edit))
+		return d.brushes.edit
+	case wmCtlColorBtn:
+		return d.brushes.footer
+	case wmDrawItem:
+		const odtButton = 4
+		// lparam carries a DRAWITEMSTRUCT pointer from the system.
+		di := *(**drawItem)(unsafe.Pointer(&lparam))
+		if di.ctlType == odtButton {
+			drawButton(hwnd, d, di)
+			return 1
 		}
 	case wmCommand:
-		switch wparam & 0xffff {
+		id, code := wparam&0xffff, wparam>>16&0xffff
+		ctrl, _, _ := procGetDlgItem.Call(hwnd, id)
+		if box, ok := d.labels[ctrl]; ok && (code == stnClicked || code == stnDblClk) {
+			if enabled, _, _ := procIsWindowEnabled.Call(box); enabled != 0 {
+				procSendMessageW.Call(box, bmClick, 0, 0)
+			}
+			return 1
+		}
+		switch id {
 		case idOK:
-			if openDialog.ok == nil || openDialog.ok(hwnd) {
+			if d.ok == nil || d.ok(hwnd) {
 				procEndDialog.Call(hwnd, idOK)
 			}
 			return 1
@@ -287,18 +366,22 @@ func textHeight(ctrl uintptr, text string, width int32) int32 {
 	return r.bottom
 }
 
-// row is a control placed below the previous one, gap dialog units
-// further down. A row with text is a static control sized to fit it.
+// row is a control placed gap dialog units below the previous row, or
+// beside it, vertically centered, with sameRow. A row with text is a
+// static control sized to fit it.
 type row struct {
-	id   uint16
-	gap  int
-	text string
+	id      uint16
+	gap     int
+	text    string
+	sameRow bool
 }
 
-// layout stacks the rows from the top margin, then the OK and Cancel
-// buttons, and resizes the dialog around them, keeping it centered.
-func layout(hwnd uintptr, rows []row, buttonGap int) {
+// layout stacks the rows from the top margin, puts the OK and Cancel
+// buttons in a footer below them, and resizes the dialog to fit, keeping
+// it centered.
+func layout(hwnd uintptr, d *dialogSpec, rows []row, buttonGap int) {
 	y := dluY(hwnd, dialogMargin)
+	var rowTop, rowBottom int32
 	for i, r := range rows {
 		ctrl, _, _ := procGetDlgItem.Call(hwnd, uintptr(r.id))
 		cr := childRect(hwnd, ctrl)
@@ -306,21 +389,37 @@ func layout(hwnd uintptr, rows []row, buttonGap int) {
 		if r.text != "" {
 			h = textHeight(ctrl, r.text, cr.right-cr.left)
 		}
-		if i > 0 {
-			y += dluY(hwnd, r.gap)
+		top := y
+		switch {
+		case r.sameRow:
+			top = rowTop
+			if h < rowBottom-rowTop {
+				top += (rowBottom - rowTop - h) / 2
+			}
+		case i > 0:
+			top += dluY(hwnd, r.gap)
+			rowTop = top
+		default:
+			rowTop = top
 		}
-		procSetWindowPos.Call(ctrl, 0, uintptr(cr.left), uintptr(y), uintptr(cr.right-cr.left), uintptr(h), swpNoZOrder)
-		y += h
+		procSetWindowPos.Call(ctrl, 0, uintptr(cr.left), uintptr(top), uintptr(cr.right-cr.left), uintptr(h), swpNoZOrder)
+		if !r.sameRow {
+			rowBottom = top + h
+		} else if top+h > rowBottom {
+			rowBottom = top + h
+		}
+		y = rowBottom
 	}
-	y += dluY(hwnd, buttonGap)
+	d.footerTop = y + dluY(hwnd, buttonGap)
+	buttonY := d.footerTop + dluY(hwnd, footerPad)
 	var buttonH int32
 	for _, id := range []uintptr{idOK, idCancel} {
 		ctrl, _, _ := procGetDlgItem.Call(hwnd, id)
 		cr := childRect(hwnd, ctrl)
 		buttonH = cr.bottom - cr.top
-		procSetWindowPos.Call(ctrl, 0, uintptr(cr.left), uintptr(y), 0, 0, swpNoSize|swpNoZOrder)
+		procSetWindowPos.Call(ctrl, 0, uintptr(cr.left), uintptr(buttonY), 0, 0, swpNoSize|swpNoZOrder)
 	}
-	clientH := y + buttonH + dluY(hwnd, dialogMargin)
+	clientH := buttonY + buttonH + dluY(hwnd, footerPad)
 
 	var win, client rect
 	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&win)))
@@ -346,7 +445,7 @@ func askPort(title, prompt string, current uint16, validate func(uint16) error) 
 	buttonY := editY + 20
 	t := newTemplate(title, buttonY+buttonHeight+dialogMargin)
 	t.control(classStatic, idIntro, ssNoPrefix, dialogMargin, dialogMargin, contentWidth, promptHeight, prompt)
-	t.control(classEdit, idEdit, wsBorder|wsTabStop|esNumber|esAutoHScroll, dialogMargin, editY, 60, 14, "")
+	t.controlEx(classEdit, idEdit, wsTabStop|esNumber|esAutoHScroll, wsExClientEdge, dialogMargin, editY, 60, 14, "")
 	t.buttons(buttonY, "OK")
 
 	initial := ""
@@ -354,30 +453,31 @@ func askPort(title, prompt string, current uint16, validate func(uint16) error) 
 		initial = strconv.Itoa(int(current))
 	}
 	var result uint16
-	ok := runDialog(t, &dialogSpec{
-		init: func(hwnd uintptr) {
-			text, _ := windows.UTF16PtrFromString(initial)
-			procSetDlgItemTextW.Call(hwnd, idEdit, uintptr(unsafe.Pointer(text)))
-			procSendDlgItemMessageW.Call(hwnd, idEdit, emLimitText, 5, 0)
-			layout(hwnd, []row{{id: idIntro, text: prompt}, {id: idEdit, gap: 6}}, 8)
-		},
-		ok: func(hwnd uintptr) bool {
-			var buf [8]uint16
-			procGetDlgItemTextW.Call(hwnd, idEdit, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-			port, err := strconv.ParseUint(windows.UTF16ToString(buf[:]), 10, 16)
-			if err != nil || port == 0 {
-				err = fmt.Errorf("enter a port from 1 to 65535")
-			} else {
-				err = validate(uint16(port))
-			}
-			if err != nil {
-				warnBox(hwnd, err.Error())
-				return false
-			}
-			result = uint16(port)
-			return true
-		},
-	})
+	spec := &dialogSpec{}
+	spec.init = func(hwnd uintptr) {
+		themeControls(hwnd, spec.palette, []uintptr{idEdit, idOK, idCancel})
+		text, _ := windows.UTF16PtrFromString(initial)
+		procSetDlgItemTextW.Call(hwnd, idEdit, uintptr(unsafe.Pointer(text)))
+		procSendDlgItemMessageW.Call(hwnd, idEdit, emLimitText, 5, 0)
+		layout(hwnd, spec, []row{{id: idIntro, text: prompt}, {id: idEdit, gap: 6}}, 10)
+	}
+	spec.ok = func(hwnd uintptr) bool {
+		var buf [8]uint16
+		procGetDlgItemTextW.Call(hwnd, idEdit, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		port, err := strconv.ParseUint(windows.UTF16ToString(buf[:]), 10, 16)
+		if err != nil || port == 0 {
+			err = fmt.Errorf("enter a port from 1 to 65535")
+		} else {
+			err = validate(uint16(port))
+		}
+		if err != nil {
+			warnBox(hwnd, err.Error())
+			return false
+		}
+		result = uint16(port)
+		return true
+	}
+	ok := runDialog(t, spec)
 	return result, ok
 }
 
@@ -391,7 +491,8 @@ type option struct {
 
 // askOptions shows intro, a checkbox for each option, and the OK button
 // labeled ok beside Cancel. It reports each option's final state, and
-// false when canceled.
+// false when canceled. Each checkbox's label is a separate static control
+// that toggles it, so the label follows the dialog's text colors.
 func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 	introHeight := lines(intro, charsPerLine) * lineHeight
 	y := dialogMargin + introHeight + 6
@@ -408,44 +509,52 @@ func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 	buttonY := y + 2
 	t := newTemplate(title, buttonY+buttonHeight+dialogMargin)
 	t.control(classStatic, idIntro, ssNoPrefix, dialogMargin, dialogMargin, contentWidth, introHeight, intro)
+	textX, textW := dialogMargin+detailIndent, contentWidth-detailIndent
 	for i, o := range opts {
-		t.control(classButton, uint16(idFirstCheck+i), wsTabStop|bsAutoCheckBox, dialogMargin, at[i].y, contentWidth, checkboxHeight, o.label)
+		t.control(classButton, uint16(idFirstCheck+i), wsTabStop|bsAutoCheckBox, dialogMargin, at[i].y, checkboxBox, checkboxHeight, "")
+		t.control(classStatic, uint16(idFirstLabel+i), ssNoPrefix|ssNotify, textX, at[i].y, textW, checkboxHeight, o.label)
 		if o.detail != "" {
-			t.control(classStatic, uint16(idFirstDetail+i), ssNoPrefix, dialogMargin+detailIndent, at[i].y+checkboxHeight+1,
-				contentWidth-detailIndent, at[i].detailHeight, o.detail)
+			t.control(classStatic, uint16(idFirstDetail+i), ssNoPrefix, textX, at[i].y+checkboxHeight+1, textW, at[i].detailHeight, o.detail)
 		}
 	}
 	t.buttons(buttonY, ok)
 
 	states := make([]bool, len(opts))
-	accepted := runDialog(t, &dialogSpec{
-		init: func(hwnd uintptr) {
-			for i, o := range opts {
-				if o.checked {
-					procCheckDlgButton.Call(hwnd, uintptr(idFirstCheck+i), bstChecked)
-				}
-				if o.disabled {
-					h, _, _ := procGetDlgItem.Call(hwnd, uintptr(idFirstCheck+i))
-					procEnableWindow.Call(h, 0)
-				}
+	spec := &dialogSpec{subtle: make(map[uintptr]bool), labels: make(map[uintptr]uintptr)}
+	spec.init = func(hwnd uintptr) {
+		item := func(id int) uintptr { h, _, _ := procGetDlgItem.Call(hwnd, uintptr(id)); return h }
+		ids := []uintptr{idOK, idCancel}
+		rows := []row{{id: idIntro, text: intro}}
+		for i, o := range opts {
+			box, label := item(idFirstCheck+i), item(idFirstLabel+i)
+			ids = append(ids, uintptr(idFirstCheck+i))
+			spec.labels[label] = box
+			if o.checked {
+				procCheckDlgButton.Call(hwnd, uintptr(idFirstCheck+i), bstChecked)
 			}
-			rows := []row{{id: idIntro, text: intro}}
-			for i, o := range opts {
-				rows = append(rows, row{id: uint16(idFirstCheck + i), gap: 8})
-				if o.detail != "" {
-					rows = append(rows, row{id: uint16(idFirstDetail + i), gap: 1, text: o.detail})
-				}
+			if o.disabled {
+				procEnableWindow.Call(box, 0)
+				spec.subtle[label] = true
 			}
-			layout(hwnd, rows, 10)
-		},
-		ok: func(hwnd uintptr) bool {
-			for i := range opts {
-				r, _, _ := procIsDlgButtonChecked.Call(hwnd, uintptr(idFirstCheck+i))
-				states[i] = r == bstChecked
+			rows = append(rows,
+				row{id: uint16(idFirstCheck + i), gap: 8},
+				row{id: uint16(idFirstLabel + i), text: o.label, sameRow: true})
+			if o.detail != "" {
+				spec.subtle[item(idFirstDetail+i)] = true
+				rows = append(rows, row{id: uint16(idFirstDetail + i), gap: 1, text: o.detail})
 			}
-			return true
-		},
-	})
+		}
+		themeControls(hwnd, spec.palette, ids)
+		layout(hwnd, spec, rows, 10)
+	}
+	spec.ok = func(hwnd uintptr) bool {
+		for i := range opts {
+			r, _, _ := procIsDlgButtonChecked.Call(hwnd, uintptr(idFirstCheck+i))
+			states[i] = r == bstChecked
+		}
+		return true
+	}
+	accepted := runDialog(t, spec)
 	return states, accepted
 }
 
