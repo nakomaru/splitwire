@@ -40,10 +40,10 @@ func TestRoundTrip(t *testing.T) {
 			conn.Send(Reply{Error: "bad op " + req.Op})
 			return
 		}
-		conn.Send(Reply{Status: &Status{
-			State: StateUp, Tunnel: req.Name, ConfigHash: ConfigHash(req.Config),
+		conn.Send(Reply{Status: &Status{Tunnels: []Tunnel{{
+			Name: req.Name, As: req.As, State: StateUp, ConfigHash: ConfigHash(req.Config),
 			Peers: []stats.Peer{{PublicKey: "k", RxBytes: 5}},
-		}})
+		}}}})
 		conn.Receive(&req)
 		conn.Send(Reply{Error: "boom"})
 	}()
@@ -56,11 +56,12 @@ func TestRoundTrip(t *testing.T) {
 	}
 	conn := NewConn(c)
 	defer conn.Close()
-	rep, err := conn.Call(Request{Op: OpUp, Name: "home", Config: "text"})
+	rep, err := conn.Call(Request{Op: OpUp, Name: "home", As: AsProxy, Config: "text"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Status.Tunnel != "home" || rep.Status.ConfigHash != ConfigHash("text") || rep.Status.Peers[0].RxBytes != 5 {
+	tun := rep.Status.Find("home")
+	if tun == nil || tun.As != AsProxy || tun.ConfigHash != ConfigHash("text") || tun.Peers[0].RxBytes != 5 || !tun.Running() {
 		t.Fatalf("reply %+v", rep.Status)
 	}
 	if _, err := conn.Call(Request{Op: OpStatus}); err == nil || err.Error() != "boom" {

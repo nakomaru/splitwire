@@ -83,3 +83,12 @@ func PrintAdapterStatus(w io.Writer, name string) (bool, error) {
 	}
 	return true, nil
 }
+
+// InterfaceIndex is the tunnel adapter's interface index.
+func (t *Tunnel) InterfaceIndex() (uint32, error) {
+	row, err := t.luid.Interface()
+	if err != nil {
+		return 0, err
+	}
+	return row.InterfaceIndex, nil
+}

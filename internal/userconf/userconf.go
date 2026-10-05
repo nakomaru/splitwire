@@ -3,12 +3,17 @@ package userconf
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/windows"
+
+	"splitwire/internal/config"
 )
 
 // Dir is the configuration folder, %APPDATA%\splitwire.
@@ -102,4 +107,73 @@ func Names() ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// FirstProxyPort is the lowest port EnsureProxy assigns.
+const FirstProxyPort = 1080
+
+// EnsureProxy returns the Proxy address of the configuration at path. A
+// configuration without one gets the lowest port from FirstProxyPort up
+// that no other tunnel in Dir claims and nothing listens on, written to its
+// [Splitwire] section so apps can keep using that address.
+func EnsureProxy(path string) (netip.AddrPort, error) {
+	c, err := config.Load(path)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	if c.Proxy.IsValid() {
+		return c.Proxy, nil
+	}
+	claimed := make(map[uint16]bool)
+	names, _ := Names()
+	for _, n := range names {
+		other, err := Resolve(n)
+		if err != nil || strings.EqualFold(other, path) {
+			continue
+		}
+		if oc, err := config.Load(other); err == nil && oc.Proxy.IsValid() {
+			claimed[oc.Proxy.Port()] = true
+		}
+	}
+	for port := FirstProxyPort; port <= 65535; port++ {
+		if claimed[uint16(port)] {
+			continue
+		}
+		ap := netip.AddrPortFrom(config.ProxyHost, uint16(port))
+		ln, err := net.Listen("tcp", ap.String())
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		if err := setKey(path, "Proxy", strconv.Itoa(port)); err != nil {
+			return netip.AddrPort{}, err
+		}
+		return ap, nil
+	}
+	return netip.AddrPort{}, fmt.Errorf("no free port for the proxy")
+}
+
+// setKey adds key = val to the file's first [Splitwire] section, or to a
+// new one at the end.
+func setKey(path, key, val string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text := string(b)
+	nl := "\n"
+	if strings.Contains(text, "\r\n") {
+		nl = "\r\n"
+	}
+	lines := strings.Split(text, nl)
+	entry := key + " = " + val
+	for i, line := range lines {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.EqualFold(strings.TrimSpace(code), "[Splitwire]") {
+			lines = append(lines[:i+1], append([]string{entry}, lines[i+1:]...)...)
+			return os.WriteFile(path, []byte(strings.Join(lines, nl)), 0o600)
+		}
+	}
+	text = strings.TrimRight(text, "\r\n") + nl + nl + "[Splitwire]" + nl + entry + nl
+	return os.WriteFile(path, []byte(text), 0o600)
 }

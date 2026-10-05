@@ -4,9 +4,16 @@ WireGuard for Windows with per-app split tunneling, with a command line
 and a notification area app. It downloads and installs everything else it
 needs on first use, so the WireGuard app is not required.
 
-- **full**: routes by `AllowedIPs`, the same as the WireGuard app.
-- **include**: only the listed apps (and their child processes) use the tunnel.
-- **exclude**: everything except the listed apps uses the tunnel.
+Any tunnel runs one of two ways:
+
+- **VPN**: through a network adapter, for every app, in one of three modes.
+  One tunnel runs as the VPN at a time.
+  - **full**: routes by `AllowedIPs`, the same as the WireGuard app.
+  - **include**: only the listed apps (and their child processes) use the tunnel.
+  - **exclude**: everything except the listed apps uses the tunnel.
+- **Proxy**: entirely in user space, as a local SOCKS5 and HTTP proxy that
+  apps with proxy settings point at. Any number of tunnels run as proxies
+  at once, beside the VPN, so different apps can use different tunnels.
 
 ## Quick start
 
@@ -15,6 +22,7 @@ needs on first use, so the WireGuard app is not required.
 splitwire import           # copy tunnels from the WireGuard app
 splitwire check home       # validate and show routes, DNS and apps
 splitwire up home          # run until Ctrl+C
+splitwire proxy warp       # or run it as a proxy until Ctrl+C (no admin needed)
 splitwire install home     # or run as a service that starts at boot
 ```
 
@@ -36,13 +44,18 @@ and continue in a new console window.
 ## Tray app
 
 `splitwire-tray.exe` sits in the notification area. Its icon is gray when
-no tunnel is up, amber while one connects or disconnects, green when one is
-up and red after a failure. The menu lists every tunnel in
-`%APPDATA%\splitwire`; clicking one connects it (replacing any other) or
-disconnects it. It also shows the last handshake and transfer, edits
-configurations in Notepad, imports from the WireGuard app, shows the
-manager log, picks a tunnel to connect at boot and starts the tray at
-sign-in.
+no tunnel runs, amber while one connects or disconnects, green when tunnels
+are up and red after a failure. The menu lists every tunnel in
+`%APPDATA%\splitwire`, each marked with how it runs (`Office - VPN`,
+`WARP - proxy 127.0.0.1:1080`). Each tunnel's submenu picks **VPN**,
+**Proxy** or **Off**, shows the last handshake and transfer, applies edits
+to a running tunnel and opens the file in Notepad. Picking VPN for one
+tunnel moves the previous VPN tunnel to Off; proxies stay up.
+
+"Reconnect at boot" brings whatever runs back up when Windows starts, and
+keeps that list current as tunnels change. The menu also disconnects
+everything, imports from the WireGuard app, shows the manager log and starts
+the tray at sign-in.
 
 The first run offers "Set up splitwire", which asks for administrator rights
 once to install the manager service (`splitwire manager install`). The
@@ -50,8 +63,38 @@ manager runs as SYSTEM and does the privileged work; the tray runs as you
 and talks to it over the pipe `\\.\pipe\splitwire`, which only you, SYSTEM and
 Administrators can open. The tray reads your configurations and expands
 `%VARIABLES%` in `App` lines as you, so switching tunnels never prompts.
-When you edit the running tunnel's file, the menu offers to apply the
+When you edit a running tunnel's file, its submenu offers to apply the
 changes.
+
+## Proxies
+
+A tunnel running as a proxy listens on its `Proxy` address, `127.0.0.1` and
+a port from 1080 up by default. The first time a tunnel runs as a proxy,
+splitwire picks a port no other tunnel claims and writes it to the file as
+`Proxy = 1080`, so app settings keep working. The port serves both
+protocols:
+
+| App setting | Value |
+|---|---|
+| SOCKS5 (Firefox, qBittorrent, Telegram, curl `-x socks5h://`) | `127.0.0.1:1080` |
+| HTTP or HTTPS proxy | `127.0.0.1:1080` |
+| Chrome and Edge | launch with `--proxy-server=socks5://127.0.0.1:1080` |
+
+Each proxy tunnel is a complete WireGuard client with its own TCP/IP stack
+(wireguard-go and gVisor's netstack). Connections an app makes through the
+proxy leave from the tunnel's `Address`; only the tunnel's encrypted UDP
+packets touch the real network. Host names resolve through the tunnel's
+`DNS` servers, or through the system's when it sets none; in Firefox, turn
+on "Proxy DNS when using SOCKS v5" so names go through the proxy. When a
+site has both IPv6 and IPv4 addresses, the proxy starts on IPv6 and adds
+IPv4 after 250 ms, keeping whichever connects first, so a tunnel with
+broken IPv6 still connects quickly.
+
+A proxy tunnel's own packets follow the system routes, so a VPN tunnel in
+full or exclude mode with a default route carries them: `WARP` as a proxy
+inside `Office` as a full VPN leaves through the office and then Cloudflare. `ProxyVia = vpn`
+makes that explicit for any VPN mode: the packets go only through the VPN
+tunnel, and stop while no VPN runs.
 
 ## Commands
 
@@ -59,6 +102,7 @@ changes.
 |---|---|
 | `import [--force] [name...]` | Copy tunnels from the WireGuard app; existing files stay unless `--force` |
 | `up <tunnel>` | Run a tunnel in the console until Ctrl+C |
+| `proxy <tunnel>` | Run a tunnel as a proxy in the console until Ctrl+C, without administrator rights |
 | `check <tunnel>` | Parse a configuration and print its routes, DNS, kill switch and apps |
 | `apps [filter]` | List running programs with their full paths |
 | `install <tunnel>` | Copy the configuration and executable into `%ProgramFiles%\splitwire` and register an auto-start service `splitwire$<name>` |
@@ -81,6 +125,11 @@ user, because the service runs as SYSTEM with a different profile.
 | `KillSwitch` | `auto`, `on`, `off` (full and exclude modes) | `auto`: on when `AllowedIPs` has a default route |
 | `AllowLAN` | `on`, `off`: exempt private networks from the kill switch | `off` |
 | `StrictDNS` | `on`, `off`: block DNS servers other than `[Interface] DNS` | `on` |
+| `Proxy` | port, or address and port, such as `0.0.0.0:1080` to serve the LAN | picked from 1080 up on first use |
+| `ProxyVia` | `auto`: proxy packets follow the system routes; `vpn`: only through the VPN tunnel | `auto` |
+
+`Mode`, `App`, `KillSwitch`, `AllowLAN` and `StrictDNS` apply when the tunnel
+runs as a VPN; `Proxy` and `ProxyVia` when it runs as a proxy.
 
 ## What it installs
 
@@ -132,8 +181,16 @@ driver, so the driver's own permits for listed apps outrank them.
   through the tunnel either way.
 - **Existing connections keep their route** until the app reconnects; start
   the tunnel before the apps it covers.
-- One splitwire tunnel runs at a time. The driver admits one controller, so the
-  Mullvad VPN app cannot run alongside splitwire.
+- One tunnel runs as the VPN at a time. The driver admits one controller, so
+  the Mullvad VPN app cannot run alongside splitwire either.
+- **Proxies work only for apps with proxy settings.** Most games and voice
+  chat have none. UDP goes through a proxy only for apps that use SOCKS5 UDP
+  (UDP ASSOCIATE); browsers use TCP through a proxy.
+- **Any program on the PC can use a proxy port**, and with a `Proxy` address
+  other than loopback, any device that reaches it. The proxies take no
+  password.
+- One tunnel cannot run as the VPN and a proxy at once: both would use the
+  same WireGuard key, and the server tracks one endpoint per key.
 - If splitwire is killed without shutting down, the driver stays engaged until
   the next `up` or `cleanup` resets it. In include mode the listed apps have
   no network until then; the WireGuard adapter itself disappears with the

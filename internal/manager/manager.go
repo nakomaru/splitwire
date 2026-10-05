@@ -4,15 +4,11 @@
 package manager
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -20,11 +16,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"splitwire/internal/bootstrap"
-	"splitwire/internal/config"
-	"splitwire/internal/engine"
 	"splitwire/internal/ipc"
-	"splitwire/internal/logx"
-	"splitwire/internal/stats"
 )
 
 // ServiceName is the manager service.
@@ -33,12 +25,17 @@ const ServiceName = ipc.ServiceName
 // RunCommand is the hidden CLI command the service executes.
 const RunCommand = "manager-run"
 
-// statsInterval is how often watchers get fresh peer statistics while a tunnel is up.
+// statsInterval is how often watchers get fresh peer statistics.
 const statsInterval = 2 * time.Second
 
+// bootFile holds the tunnels to bring up at boot, with their configuration
+// text, in the configs folder that only SYSTEM and Administrators can read.
+const bootFile = "boot.json"
+
+// Files of the single boot tunnel that bootFile replaces.
 const (
-	autostartName = "autostart.name"
-	autostartConf = "autostart.conf"
+	legacyBootName = "autostart.name"
+	legacyBootConf = "autostart.conf"
 )
 
 // Install copies the executables into the install root and registers and
@@ -151,8 +148,9 @@ func Uninstall() error {
 		return err
 	}
 	if dir, err := bootstrap.ConfigsDir(); err == nil {
-		os.Remove(filepath.Join(dir, autostartName))
-		os.Remove(filepath.Join(dir, autostartConf))
+		for _, f := range []string{bootFile, legacyBootName, legacyBootConf} {
+			os.Remove(filepath.Join(dir, f))
+		}
 	}
 	log.Printf("Removed the %s service", ServiceName)
 	return nil
@@ -171,330 +169,4 @@ func Installed() bool {
 	}
 	s.Close()
 	return true
-}
-
-type manager struct {
-	ring *logx.Ring
-
-	// op serializes bringing tunnels up and down.
-	op   sync.Mutex
-	stop chan struct{}
-
-	// tunMu guards tunnel. Statistics readers hold it shared, so teardown
-	// never closes the adapter under them.
-	tunMu  sync.RWMutex
-	tunnel *engine.Tunnel
-
-	mu       sync.Mutex
-	status   ipc.Status
-	watchers map[chan ipc.Status]struct{}
-}
-
-type service struct {
-	userSID string
-}
-
-// Run executes the manager service.
-func Run(userSID string) error {
-	return svc.Run(ServiceName, &service{userSID: userSID})
-}
-
-func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
-	changes <- svc.Status{State: svc.StartPending}
-	m := &manager{
-		ring:     logx.NewRing(500),
-		status:   ipc.Status{State: ipc.StateDown},
-		watchers: make(map[chan ipc.Status]struct{}),
-	}
-	if dir, err := bootstrap.LogsDir(); err == nil {
-		os.MkdirAll(dir, 0o700)
-		if f, err := logx.Setup(filepath.Join(dir, "manager.log"), m.ring); err == nil {
-			defer f.Close()
-		}
-	}
-	ln, err := ipc.Listen(s.userSID)
-	if err != nil {
-		log.Printf("Error: listen on %s: %v", ipc.PipeName, err)
-		return true, 1
-	}
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	log.Printf("Manager started")
-
-	m.status.Autostart = m.autostartName()
-	if name, text := m.autostart(); name != "" {
-		go func() {
-			if err := m.up(name, text); err != nil {
-				log.Printf("Autostart of %s failed: %v", name, err)
-			}
-		}()
-	}
-	go m.serve(ln)
-
-	for req := range r {
-		switch req.Cmd {
-		case svc.Stop, svc.Shutdown:
-			changes <- svc.Status{State: svc.StopPending}
-			ln.Close()
-			m.down()
-			log.Printf("Manager stopped")
-			return false, 0
-		case svc.Interrogate:
-			changes <- req.CurrentStatus
-		}
-	}
-	return false, 0
-}
-
-func (m *manager) serve(ln net.Listener) {
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		go m.handle(ipc.NewConn(c))
-	}
-}
-
-func (m *manager) handle(c *ipc.Conn) {
-	defer c.Close()
-	for {
-		var req ipc.Request
-		if err := c.Receive(&req); err != nil {
-			return
-		}
-		var rep ipc.Reply
-		switch req.Op {
-		case ipc.OpStatus:
-			st := m.snapshot(true)
-			rep.Status = &st
-		case ipc.OpUp:
-			if err := m.up(req.Name, req.Config); err != nil {
-				rep.Error = err.Error()
-			}
-			st := m.snapshot(false)
-			rep.Status = &st
-		case ipc.OpDown:
-			m.down()
-			st := m.snapshot(false)
-			rep.Status = &st
-		case ipc.OpAutostart:
-			if err := m.setAutostart(req.Name, req.Config); err != nil {
-				rep.Error = err.Error()
-			}
-			st := m.snapshot(false)
-			rep.Status = &st
-		case ipc.OpLog:
-			rep.Log = m.ring.Lines()
-		case ipc.OpWatch:
-			m.watch(c)
-			return
-		default:
-			rep.Error = fmt.Sprintf("unknown operation %q", req.Op)
-		}
-		if err := c.Send(rep); err != nil {
-			return
-		}
-	}
-}
-
-// watch streams statuses to c until the client goes away.
-func (m *manager) watch(c *ipc.Conn) {
-	ch := make(chan ipc.Status, 1)
-	m.mu.Lock()
-	m.watchers[ch] = struct{}{}
-	first := m.status
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		delete(m.watchers, ch)
-		m.mu.Unlock()
-	}()
-	if err := c.Send(first); err != nil {
-		return
-	}
-	for st := range ch {
-		if err := c.Send(st); err != nil {
-			return
-		}
-	}
-}
-
-// publish replaces the status and hands it to every watcher, dropping a
-// status a slow watcher has not taken yet.
-func (m *manager) publish(update func(*ipc.Status)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	update(&m.status)
-	for ch := range m.watchers {
-		select {
-		case <-ch:
-		default:
-		}
-		ch <- m.status
-	}
-}
-
-func (m *manager) snapshot(refreshPeers bool) ipc.Status {
-	if refreshPeers {
-		m.refreshPeers()
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.status
-}
-
-func (m *manager) refreshPeers() {
-	m.tunMu.RLock()
-	var peers []stats.Peer
-	var err error
-	if m.tunnel != nil {
-		peers, err = m.tunnel.Peers()
-	}
-	m.tunMu.RUnlock()
-	if err != nil || peers == nil {
-		return
-	}
-	m.publish(func(s *ipc.Status) {
-		if s.State == ipc.StateUp {
-			s.Peers = peers
-		}
-	})
-}
-
-func (m *manager) up(name, text string) error {
-	c, err := config.Parse(text, name)
-	if err != nil {
-		return err
-	}
-	m.op.Lock()
-	defer m.op.Unlock()
-	m.downLocked()
-
-	apps := len(c.Apps)
-	m.publish(func(s *ipc.Status) {
-		*s = ipc.Status{State: ipc.StateStarting, Tunnel: name, Mode: c.Mode.String(), Apps: apps,
-			ConfigHash: ipc.ConfigHash(text), Autostart: s.Autostart}
-	})
-	log.Printf("Starting tunnel %s (mode %s)", name, c.Mode)
-	t, err := engine.Up(context.Background(), c)
-	if err != nil {
-		log.Printf("Tunnel %s failed: %v", name, err)
-		m.publish(func(s *ipc.Status) {
-			s.State, s.Error = ipc.StateError, err.Error()
-		})
-		return err
-	}
-	m.tunMu.Lock()
-	m.tunnel = t
-	m.tunMu.Unlock()
-	m.stop = make(chan struct{})
-	go m.tick(m.stop)
-	log.Printf("Tunnel %s is up", name)
-	m.publish(func(s *ipc.Status) {
-		s.State, s.Since = ipc.StateUp, time.Now()
-	})
-	return nil
-}
-
-// tick refreshes peer statistics for watchers while the tunnel runs.
-func (m *manager) tick(stop chan struct{}) {
-	tk := time.NewTicker(statsInterval)
-	defer tk.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-tk.C:
-			m.mu.Lock()
-			watched := len(m.watchers) > 0
-			m.mu.Unlock()
-			if watched {
-				m.refreshPeers()
-			}
-		}
-	}
-}
-
-func (m *manager) down() {
-	m.op.Lock()
-	defer m.op.Unlock()
-	m.downLocked()
-}
-
-func (m *manager) downLocked() {
-	m.tunMu.Lock()
-	t := m.tunnel
-	m.tunnel = nil
-	m.tunMu.Unlock()
-	if t == nil {
-		m.publish(func(s *ipc.Status) {
-			if s.State == ipc.StateError {
-				*s = ipc.Status{State: ipc.StateDown, Autostart: s.Autostart}
-			}
-		})
-		return
-	}
-	m.mu.Lock()
-	name := m.status.Tunnel
-	m.mu.Unlock()
-	m.publish(func(s *ipc.Status) { s.State = ipc.StateStopping })
-	close(m.stop)
-	t.Down()
-	log.Printf("Tunnel %s is down", name)
-	m.publish(func(s *ipc.Status) {
-		*s = ipc.Status{State: ipc.StateDown, Autostart: s.Autostart}
-	})
-}
-
-func (m *manager) autostartName() string {
-	dir, err := bootstrap.ConfigsDir()
-	if err != nil {
-		return ""
-	}
-	b, err := os.ReadFile(filepath.Join(dir, autostartName))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-func (m *manager) autostart() (name, text string) {
-	name = m.autostartName()
-	if name == "" {
-		return "", ""
-	}
-	dir, _ := bootstrap.ConfigsDir()
-	b, err := os.ReadFile(filepath.Join(dir, autostartConf))
-	if err != nil {
-		log.Printf("Autostart configuration missing: %v", err)
-		return "", ""
-	}
-	return name, string(b)
-}
-
-// setAutostart stores the tunnel to bring up at boot. The configs folder
-// is readable only by SYSTEM and Administrators.
-func (m *manager) setAutostart(name, text string) error {
-	dir, err := bootstrap.ConfigsDir()
-	if err != nil {
-		return err
-	}
-	if name == "" {
-		os.Remove(filepath.Join(dir, autostartName))
-		os.Remove(filepath.Join(dir, autostartConf))
-		log.Printf("Autostart cleared")
-	} else {
-		if _, err := config.Parse(text, name); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dir, autostartConf), []byte(text), 0o600); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dir, autostartName), []byte(name), 0o600); err != nil {
-			return err
-		}
-		log.Printf("Autostart set to %s", name)
-	}
-	m.publish(func(s *ipc.Status) { s.Autostart = name })
-	return nil
 }

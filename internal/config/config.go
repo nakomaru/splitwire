@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -55,6 +56,42 @@ func (s Switch) String() string {
 	return "auto"
 }
 
+// Via is the path a proxy tunnel's WireGuard packets take.
+type Via int
+
+const (
+	// ViaAuto follows the system routes, which include a running VPN tunnel's.
+	ViaAuto Via = iota
+	// ViaVPN sends them only through the running VPN tunnel, and drops them
+	// while none runs.
+	ViaVPN
+)
+
+func (v Via) String() string {
+	if v == ViaVPN {
+		return "vpn"
+	}
+	return "auto"
+}
+
+// ProxyHost is the address a proxy given only a port listens on.
+var ProxyHost = netip.AddrFrom4([4]byte{127, 0, 0, 1})
+
+// ParseProxy parses a Proxy value: a port, or an IP address and port.
+func ParseProxy(v string) (netip.AddrPort, error) {
+	if port, err := strconv.ParseUint(v, 10, 16); err == nil {
+		if port == 0 {
+			return netip.AddrPort{}, fmt.Errorf("Proxy port must be 1 to 65535")
+		}
+		return netip.AddrPortFrom(ProxyHost, uint16(port)), nil
+	}
+	ap, err := netip.ParseAddrPort(v)
+	if err != nil || ap.Port() == 0 {
+		return netip.AddrPort{}, fmt.Errorf("Proxy must be a port or an address and port, not %q", v)
+	}
+	return ap, nil
+}
+
 // Config is a parsed tunnel configuration.
 type Config struct {
 	WG *conf.Config
@@ -71,6 +108,12 @@ type Config struct {
 	// StrictDNS limits DNS (port 53) to the tunnel's DNS servers whenever
 	// [Interface] sets DNS.
 	StrictDNS bool
+
+	// Proxy is the address the tunnel's SOCKS5 and HTTP proxy listens on
+	// when it runs as a proxy. It is invalid when unset.
+	Proxy netip.AddrPort
+	// ProxyVia selects the path of the proxy's own WireGuard packets.
+	ProxyVia Via
 
 	wgText string
 }
@@ -185,6 +228,21 @@ func (c *Config) set(key, val string) error {
 			return fmt.Errorf("StrictDNS: %w", err)
 		}
 		c.StrictDNS = b
+	case "proxy":
+		ap, err := ParseProxy(val)
+		if err != nil {
+			return err
+		}
+		c.Proxy = ap
+	case "proxyvia":
+		switch strings.ToLower(val) {
+		case "auto":
+			c.ProxyVia = ViaAuto
+		case "vpn":
+			c.ProxyVia = ViaVPN
+		default:
+			return fmt.Errorf("ProxyVia must be auto or vpn, not %q", val)
+		}
 	default:
 		return fmt.Errorf("unknown [Splitwire] key %q", key)
 	}
@@ -326,5 +384,9 @@ func (c *Config) WithExpandedApps() (string, error) {
 	fmt.Fprintf(&b, "KillSwitch = %s\n", c.KillSwitch)
 	fmt.Fprintf(&b, "AllowLAN = %t\n", c.AllowLAN)
 	fmt.Fprintf(&b, "StrictDNS = %t\n", c.StrictDNS)
+	if c.Proxy.IsValid() {
+		fmt.Fprintf(&b, "Proxy = %s\n", c.Proxy)
+	}
+	fmt.Fprintf(&b, "ProxyVia = %s\n", c.ProxyVia)
 	return b.String(), nil
 }

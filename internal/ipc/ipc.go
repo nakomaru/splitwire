@@ -25,43 +25,82 @@ const ServiceName = "splitwire"
 
 // Operations.
 const (
-	OpStatus    = "status"    // reply with the current Status
-	OpUp        = "up"        // bring up Name from Config, replacing any running tunnel
-	OpDown      = "down"      // take the running tunnel down
-	OpWatch     = "watch"     // stream a Status on every change and periodically while up
-	OpAutostart = "autostart" // bring up Name from Config at boot; an empty Name clears it
-	OpLog       = "log"       // reply with recent manager log lines
+	OpStatus = "status" // reply with the current Status
+	OpUp     = "up"     // bring Name up from Config as As; a VPN replaces the running VPN
+	OpDown   = "down"   // take Name down, or every tunnel when Name is empty
+	OpWatch  = "watch"  // stream a Status on every change and periodically while tunnels run
+	OpBoot   = "boot"   // Boot: bring the running tunnels back up when Windows starts
+	OpLog    = "log"    // reply with recent manager log lines
+)
+
+// Ways a tunnel runs.
+const (
+	// AsVPN runs the tunnel through a network adapter, routed by its Mode.
+	// One tunnel runs as a VPN at a time.
+	AsVPN = "vpn"
+	// AsProxy runs the tunnel in user space behind a local SOCKS5 and HTTP
+	// proxy. Any number run at once.
+	AsProxy = "proxy"
 )
 
 // Request is one client request.
 type Request struct {
 	Op     string
 	Name   string `json:",omitempty"`
+	As     string `json:",omitempty"`
 	Config string `json:",omitempty"`
+	Boot   bool   `json:",omitempty"`
 }
 
 // Tunnel states.
 const (
-	StateDown     = "down"
 	StateStarting = "starting"
 	StateUp       = "up"
 	StateStopping = "stopping"
 	StateError    = "error"
 )
 
-// Status describes the manager's tunnel.
-type Status struct {
-	State  string
-	Tunnel string `json:",omitempty"`
-	Mode   string `json:",omitempty"`
-	Apps   int    `json:",omitempty"`
+// Tunnel describes one tunnel the manager runs or failed to start.
+type Tunnel struct {
+	Name  string
+	As    string
+	State string
+	// Mode and Apps describe a VPN.
+	Mode string `json:",omitempty"`
+	Apps int    `json:",omitempty"`
+	// Listen is a proxy's address. Via is "vpn" for a proxy bound to the
+	// VPN tunnel, and Waiting reports that no VPN runs for it.
+	Listen  string `json:",omitempty"`
+	Via     string `json:",omitempty"`
+	Waiting bool   `json:",omitempty"`
 	// ConfigHash identifies the configuration text the tunnel runs, so a
 	// client can tell when the file on disk has changed since.
 	ConfigHash string       `json:",omitempty"`
 	Since      time.Time    `json:",omitempty"`
 	Error      string       `json:",omitempty"`
 	Peers      []stats.Peer `json:",omitempty"`
-	Autostart  string       `json:",omitempty"`
+}
+
+// Status describes the manager's tunnels, sorted by name.
+type Status struct {
+	Tunnels []Tunnel `json:",omitempty"`
+	// Boot reports that the running tunnels come back up at boot.
+	Boot bool `json:",omitempty"`
+}
+
+// Find returns the named tunnel, or nil.
+func (s *Status) Find(name string) *Tunnel {
+	for i := range s.Tunnels {
+		if s.Tunnels[i].Name == name {
+			return &s.Tunnels[i]
+		}
+	}
+	return nil
+}
+
+// Running reports whether the tunnel is starting or up.
+func (t *Tunnel) Running() bool {
+	return t != nil && (t.State == StateStarting || t.State == StateUp)
 }
 
 // ConfigHash identifies configuration text.

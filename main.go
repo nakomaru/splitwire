@@ -27,6 +27,7 @@ import (
 	"splitwire/internal/logx"
 	"splitwire/internal/manager"
 	"splitwire/internal/netcfg"
+	"splitwire/internal/proxy"
 	"splitwire/internal/service"
 	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
@@ -41,6 +42,7 @@ const usage = `splitwire ` + version + ` - WireGuard with per-app split tunnelin
 Usage:
   splitwire import [--force] [name...]  Copy tunnels from the WireGuard app
   splitwire up <tunnel>                 Run a tunnel in this console until Ctrl+C
+  splitwire proxy <tunnel>              Run a tunnel as a local proxy in this console until Ctrl+C
   splitwire check <tunnel>              Validate a configuration and show its effect
   splitwire apps [filter]               List running programs with their paths
   splitwire install <tunnel>            Install a tunnel as a service that starts at boot
@@ -168,6 +170,16 @@ func run(args []string) error {
 			return err
 		}
 		return check(path)
+	case "proxy":
+		arg, err := needArg(args, "<tunnel>")
+		if err != nil {
+			return err
+		}
+		path, err := existingConf(arg)
+		if err != nil {
+			return err
+		}
+		return runProxy(path)
 	case "apps":
 		filter := ""
 		if len(args) > 1 {
@@ -286,6 +298,31 @@ func up(arg string) error {
 	return engine.Run(ctx, c)
 }
 
+func runProxy(path string) error {
+	if _, err := userconf.EnsureProxy(path); err != nil {
+		return err
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if c.ProxyVia == config.ViaVPN {
+		log.Printf("ProxyVia = vpn applies when the tray app runs the proxy; here its packets follow the system routes")
+		c.ProxyVia = config.ViaAuto
+	}
+	p, err := proxy.Start(c)
+	if err != nil {
+		return err
+	}
+	log.Printf("Tunnel %s is up as a proxy: socks5://%s and http://%s; press Ctrl+C to stop", c.WG.Name, c.Proxy, c.Proxy)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	<-ctx.Done()
+	log.Printf("Shutting down proxy %s", c.WG.Name)
+	p.Close()
+	return nil
+}
+
 func check(path string) error {
 	c, err := config.Load(path)
 	if err != nil {
@@ -333,6 +370,11 @@ func check(path string) error {
 			}
 		}
 	}
+	if c.Proxy.IsValid() {
+		fmt.Printf("Proxy       %s when run as a proxy, packets via %s\n", c.Proxy, c.ProxyVia)
+	} else {
+		fmt.Printf("Proxy       a free port from %d up, assigned when first run as a proxy\n", userconf.FirstProxyPort)
+	}
 	if c.Mode != config.ModeFull {
 		paths, warnings, err := c.ExpandApps()
 		if err != nil {
@@ -359,6 +401,25 @@ func check(path string) error {
 		}
 	}
 	return nil
+}
+
+// describe says how a manager tunnel runs.
+func describe(t ipc.Tunnel) string {
+	if t.As == ipc.AsProxy {
+		d := "proxy on " + t.Listen
+		if t.Via == config.ViaVPN.String() {
+			d += " via the VPN"
+			if t.Waiting {
+				d += " (waiting for a VPN)"
+			}
+		}
+		return d
+	}
+	d := "VPN, mode " + t.Mode
+	if t.Mode != config.ModeFull.String() {
+		d += fmt.Sprintf(", %d apps", t.Apps)
+	}
+	return d
 }
 
 func onOff(b bool) string {
@@ -415,19 +476,20 @@ func status(name string) error {
 			fmt.Printf("Manager: %v\n", err)
 		} else {
 			st := rep.Status
-			fmt.Printf("Manager: tunnel %s", st.State)
-			if st.Tunnel != "" {
-				fmt.Printf(" (%s, mode %s)", st.Tunnel, st.Mode)
+			boot := ""
+			if st.Boot {
+				boot = "; running tunnels come back at boot"
 			}
-			if st.Error != "" {
-				fmt.Printf(": %s", st.Error)
-			}
-			fmt.Println()
-			if st.Autostart != "" {
-				fmt.Printf("  connects %s at boot\n", st.Autostart)
-			}
-			for _, p := range st.Peers {
-				fmt.Printf("  peer %s: handshake %s, received %s, sent %s\n", p.PublicKey, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
+			fmt.Printf("Manager: %d tunnels%s\n", len(st.Tunnels), boot)
+			for _, t := range st.Tunnels {
+				fmt.Printf("  %s: %s, %s", t.Name, describe(t), t.State)
+				if t.Error != "" {
+					fmt.Printf(": %s", t.Error)
+				}
+				fmt.Println()
+				for _, p := range t.Peers {
+					fmt.Printf("    peer %s: handshake %s, received %s, sent %s\n", p.PublicKey, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
+				}
 			}
 		}
 	} else {

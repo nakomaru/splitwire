@@ -34,24 +34,37 @@ const (
 	linkFailed
 )
 
+// tunnelFile is what the tray knows about a configuration file.
+type tunnelFile struct {
+	hash  string // hash of the expanded configuration text
+	cfg   *config.Config
+	error string
+}
+
+// tunnelMenu is a tunnel's entry and its submenu.
+type tunnelMenu struct {
+	item, vpn, proxy, off *systray.MenuItem
+	stats, problem, apply *systray.MenuItem
+}
+
 type app struct {
 	icons map[string][]byte
 
-	mu       sync.Mutex
-	status   ipc.Status
-	link     int
-	linkErr  string
-	tunnels  []string
-	hashes   map[string]string // expanded configuration hash per tunnel
-	retry    chan struct{}
-	gen      chan struct{}
-	items    map[string]*systray.MenuItem
-	statusMI *systray.MenuItem
-	statsMI  *systray.MenuItem
-	applyMI  *systray.MenuItem
-	bootMI   *systray.MenuItem
-	loginMI  *systray.MenuItem
-	setupMI  *systray.MenuItem
+	mu      sync.Mutex
+	status  ipc.Status
+	link    int
+	linkErr string
+	names   []string
+	files   map[string]tunnelFile
+	retry   chan struct{}
+	gen     chan struct{}
+
+	menus     map[string]*tunnelMenu
+	summaryMI *systray.MenuItem
+	downAllMI *systray.MenuItem
+	bootMI    *systray.MenuItem
+	loginMI   *systray.MenuItem
+	setupMI   *systray.MenuItem
 }
 
 func newApp() *app {
@@ -62,10 +75,9 @@ func newApp() *app {
 			"up":    icoBytes(colorUp),
 			"error": icoBytes(colorError),
 		},
-		status: ipc.Status{State: ipc.StateDown},
-		hashes: make(map[string]string),
-		retry:  make(chan struct{}, 1),
-		items:  make(map[string]*systray.MenuItem),
+		files: make(map[string]tunnelFile),
+		retry: make(chan struct{}, 1),
+		menus: make(map[string]*tunnelMenu),
 	}
 }
 
@@ -104,43 +116,44 @@ func (a *app) rebuild() {
 	a.gen = gen
 	systray.ResetMenu()
 
-	a.statusMI = systray.AddMenuItem("splitwire", "")
-	a.statusMI.Disable()
-	a.statsMI = systray.AddMenuItem("", "")
-	a.statsMI.Disable()
-	a.statsMI.Hide()
+	a.summaryMI = systray.AddMenuItem("splitwire", "")
+	a.summaryMI.Disable()
 	systray.AddSeparator()
 
-	a.items = make(map[string]*systray.MenuItem)
-	if len(a.tunnels) == 0 {
+	a.menus = make(map[string]*tunnelMenu)
+	if len(a.names) == 0 {
 		none := systray.AddMenuItem("No tunnels yet: import or add a .conf", "")
 		none.Disable()
 	}
-	for _, name := range a.tunnels {
+	for _, name := range a.names {
 		name := name
-		item := systray.AddMenuItemCheckbox(name, "Connect or disconnect "+name, false)
-		a.items[name] = item
-		a.onClick(item, gen, func() { a.toggle(name) })
+		m := &tunnelMenu{item: systray.AddMenuItemCheckbox(name, "", false)}
+		m.vpn = m.item.AddSubMenuItemCheckbox("VPN", "Route apps by this tunnel's Mode; one tunnel runs as the VPN at a time", false)
+		m.proxy = m.item.AddSubMenuItemCheckbox("Proxy", "Serve this tunnel as a local SOCKS5 and HTTP proxy; any number run at once", false)
+		m.off = m.item.AddSubMenuItemCheckbox("Off", "", true)
+		m.stats = m.item.AddSubMenuItem("", "")
+		m.stats.Disable()
+		m.problem = m.item.AddSubMenuItem("", "")
+		m.problem.Disable()
+		m.apply = m.item.AddSubMenuItem("Apply configuration changes", "Reconnect with the edited configuration")
+		edit := m.item.AddSubMenuItem("Edit configuration", "")
+		a.onClick(m.vpn, gen, func() { a.run(name, ipc.AsVPN) })
+		a.onClick(m.proxy, gen, func() { a.run(name, ipc.AsProxy) })
+		a.onClick(m.off, gen, func() { a.stop(name) })
+		a.onClick(m.apply, gen, func() { a.apply(name) })
+		a.onClick(edit, gen, func() { a.edit(name) })
+		a.menus[name] = m
 	}
-	a.applyMI = systray.AddMenuItem("Apply configuration changes", "Reconnect with the edited configuration")
-	a.applyMI.Hide()
-	a.onClick(a.applyMI, gen, a.apply)
 	systray.AddSeparator()
 
-	edit := systray.AddMenuItem("Edit configuration", "")
-	if len(a.tunnels) == 0 {
-		edit.Disable()
-	}
-	for _, name := range a.tunnels {
-		name := name
-		a.onClick(edit.AddSubMenuItem(name, ""), gen, func() { a.edit(name) })
-	}
+	a.downAllMI = systray.AddMenuItem("Disconnect all", "")
+	a.onClick(a.downAllMI, gen, func() { a.stop("") })
 	a.onClick(systray.AddMenuItem("Open configuration folder", ""), gen, a.openFolder)
 	a.onClick(systray.AddMenuItem("Import from WireGuard app...", "Copy tunnels from the WireGuard app (asks for administrator rights)"), gen, a.importTunnels)
 	a.onClick(systray.AddMenuItem("Show manager log", ""), gen, a.showLog)
 	systray.AddSeparator()
 
-	a.bootMI = systray.AddMenuItemCheckbox("Connect at boot", "Bring this tunnel up when Windows starts", false)
+	a.bootMI = systray.AddMenuItemCheckbox("Reconnect at boot", "Bring the running tunnels back up when Windows starts", false)
 	a.onClick(a.bootMI, gen, a.toggleBoot)
 	a.loginMI = systray.AddMenuItemCheckbox("Start splitwire at sign-in", "", runAtLogin())
 	a.onClick(a.loginMI, gen, a.toggleLogin)
@@ -148,7 +161,7 @@ func (a *app) rebuild() {
 	a.setupMI.Hide()
 	a.onClick(a.setupMI, gen, a.setup)
 	systray.AddSeparator()
-	a.onClick(systray.AddMenuItem("Quit", "Close the tray app; a running tunnel stays up"), gen, systray.Quit)
+	a.onClick(systray.AddMenuItem("Quit", "Close the tray app; running tunnels stay up"), gen, systray.Quit)
 
 	a.refreshLocked()
 }
@@ -167,100 +180,187 @@ func truncate(s string, n int) string {
 	return s[:n-3] + "..."
 }
 
-// refreshLocked updates icon, tooltip and item states from the current state.
+func plural(n int, one string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %ss", n, one)
+}
+
+// vpnDetail describes how a configuration routes as a VPN.
+func vpnDetail(c *config.Config) string {
+	if c.Mode == config.ModeFull {
+		return "all traffic by AllowedIPs"
+	}
+	return c.Mode.String() + " " + plural(len(c.Apps), "app")
+}
+
+// short describes a manager tunnel in a few words.
+func short(t *ipc.Tunnel) string {
+	switch t.State {
+	case ipc.StateStarting:
+		return "connecting"
+	case ipc.StateStopping:
+		return "disconnecting"
+	case ipc.StateError:
+		return "failed"
+	}
+	if t.As == ipc.AsProxy {
+		s := "proxy " + t.Listen
+		if t.Waiting {
+			s += ", waiting for a VPN"
+		}
+		return s
+	}
+	return "VPN"
+}
+
+// refreshLocked updates icon, tooltip and items from the current state.
 func (a *app) refreshLocked() {
-	if a.statusMI == nil {
+	if a.summaryMI == nil {
 		return
 	}
 	st := a.status
-	icon, title, tip := "down", "", "splitwire"
+	connected := a.link == linkConnected
+
+	icon, summary := "down", ""
 	switch a.link {
 	case linkConnecting:
-		title = "Connecting to the splitwire manager..."
+		summary = "Connecting to the splitwire manager..."
 	case linkMissing:
-		title = "The splitwire manager is not set up"
+		summary = "The splitwire manager is not set up"
 	case linkFailed:
-		icon, title = "error", "Manager unavailable: "+truncate(a.linkErr, 60)
+		icon, summary = "error", "Manager unavailable: "+truncate(a.linkErr, 60)
 	case linkConnected:
-		switch st.State {
-		case ipc.StateDown:
-			title = "Not connected"
-		case ipc.StateStarting:
-			icon, title = "busy", "Connecting "+st.Tunnel+"..."
-		case ipc.StateStopping:
-			icon, title = "busy", "Disconnecting "+st.Tunnel+"..."
-		case ipc.StateUp:
-			icon = "up"
-			title = st.Tunnel + " connected (" + st.Mode
-			switch {
-			case st.Mode != "full" && st.Apps == 1:
-				title += ", 1 app"
-			case st.Mode != "full":
-				title += fmt.Sprintf(", %d apps", st.Apps)
+		var parts []string
+		busy, failed, up := false, false, false
+		for i := range st.Tunnels {
+			t := &st.Tunnels[i]
+			parts = append(parts, t.Name+" "+short(t))
+			switch t.State {
+			case ipc.StateStarting, ipc.StateStopping:
+				busy = true
+			case ipc.StateError:
+				failed = true
+			case ipc.StateUp:
+				up = true
 			}
-			title += ")"
-		case ipc.StateError:
-			icon, title = "error", st.Tunnel+" failed: "+truncate(st.Error, 60)
+		}
+		switch {
+		case failed:
+			icon = "error"
+		case busy:
+			icon = "busy"
+		case up:
+			icon = "up"
+		}
+		summary = strings.Join(parts, ", ")
+		if summary == "" {
+			summary = "Not connected"
 		}
 	}
-	tip = "splitwire: " + title
 	systray.SetIcon(a.icons[icon])
-	systray.SetTooltip(truncate(tip, 120))
-	a.statusMI.SetTitle(title)
+	systray.SetTooltip(truncate("splitwire: "+summary, 120))
+	a.summaryMI.SetTitle(truncate(summary, 100))
 
-	if a.link == linkConnected && st.State == ipc.StateUp && len(st.Peers) > 0 {
-		p := st.Peers[0]
-		a.statsMI.SetTitle(fmt.Sprintf("Handshake %s, received %s, sent %s",
-			stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes)))
-		a.statsMI.Show()
-	} else {
-		a.statsMI.Hide()
-	}
-
-	active := a.link == linkConnected && (st.State == ipc.StateUp || st.State == ipc.StateStarting)
-	for name, item := range a.items {
-		if active && name == st.Tunnel {
-			item.Check()
-		} else {
-			item.Uncheck()
+	for name, m := range a.menus {
+		var t *ipc.Tunnel
+		if connected {
+			t = st.Find(name)
 		}
-		if a.link == linkConnected {
-			item.Enable()
-		} else {
-			item.Disable()
-		}
+		a.refreshTunnel(name, m, t, a.files[name], connected)
 	}
 
-	if st.State == ipc.StateUp && a.hashes[st.Tunnel] != "" && a.hashes[st.Tunnel] != st.ConfigHash {
-		a.applyMI.SetTitle("Apply changes to " + st.Tunnel)
-		a.applyMI.Show()
+	if connected && len(st.Tunnels) > 0 {
+		a.downAllMI.Show()
 	} else {
-		a.applyMI.Hide()
+		a.downAllMI.Hide()
 	}
-
-	switch {
-	case a.link != linkConnected:
-		a.bootMI.SetTitle("Connect at boot")
-		a.bootMI.Uncheck()
+	if connected {
+		a.bootMI.Enable()
+	} else {
 		a.bootMI.Disable()
-	case st.Autostart != "":
-		a.bootMI.SetTitle("Connect " + st.Autostart + " at boot")
+	}
+	if connected && st.Boot {
 		a.bootMI.Check()
-		a.bootMI.Enable()
-	case st.State == ipc.StateUp:
-		a.bootMI.SetTitle("Connect " + st.Tunnel + " at boot")
+	} else {
 		a.bootMI.Uncheck()
-		a.bootMI.Enable()
-	default:
-		a.bootMI.SetTitle("Connect at boot")
-		a.bootMI.Uncheck()
-		a.bootMI.Disable()
 	}
-
 	if a.link == linkMissing || a.link == linkFailed {
 		a.setupMI.Show()
 	} else {
 		a.setupMI.Hide()
+	}
+}
+
+func (a *app) refreshTunnel(name string, m *tunnelMenu, t *ipc.Tunnel, f tunnelFile, connected bool) {
+	title := name
+	if t != nil {
+		title += "  -  " + short(t)
+	}
+	m.item.SetTitle(title)
+	if t.Running() {
+		m.item.Check()
+	} else {
+		m.item.Uncheck()
+	}
+
+	vpnTitle, proxyTitle := "VPN", "Proxy"
+	if f.cfg != nil {
+		vpnTitle = "VPN: " + vpnDetail(f.cfg)
+		if f.cfg.Proxy.IsValid() {
+			proxyTitle = "Proxy: socks5 and http on " + f.cfg.Proxy.String()
+		} else {
+			proxyTitle = fmt.Sprintf("Proxy: on a free port from %d", userconf.FirstProxyPort)
+		}
+		if f.cfg.ProxyVia == config.ViaVPN {
+			proxyTitle += ", through the VPN"
+		}
+	}
+	m.vpn.SetTitle(vpnTitle)
+	m.proxy.SetTitle(proxyTitle)
+	as := ""
+	if t.Running() {
+		as = t.As
+	}
+	for _, c := range []struct {
+		item *systray.MenuItem
+		on   bool
+	}{{m.vpn, as == ipc.AsVPN}, {m.proxy, as == ipc.AsProxy}, {m.off, as == ""}} {
+		if c.on {
+			c.item.Check()
+		} else {
+			c.item.Uncheck()
+		}
+		if connected && (f.error == "" || c.item == m.off) {
+			c.item.Enable()
+		} else {
+			c.item.Disable()
+		}
+	}
+
+	if t != nil && t.State == ipc.StateUp && len(t.Peers) > 0 {
+		p := t.Peers[0]
+		m.stats.SetTitle(fmt.Sprintf("Handshake %s, received %s, sent %s",
+			stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes)))
+		m.stats.Show()
+	} else {
+		m.stats.Hide()
+	}
+	switch {
+	case f.error != "":
+		m.problem.SetTitle("Configuration problem: " + truncate(f.error, 80))
+		m.problem.Show()
+	case t != nil && t.State == ipc.StateError:
+		m.problem.SetTitle("Failed: " + truncate(t.Error, 80))
+		m.problem.Show()
+	default:
+		m.problem.Hide()
+	}
+	if t != nil && t.State == ipc.StateUp && f.hash != "" && f.hash != t.ConfigHash {
+		m.apply.Show()
+	} else {
+		m.apply.Hide()
 	}
 }
 
@@ -340,30 +440,34 @@ func call(req ipc.Request) (*ipc.Reply, error) {
 
 // ---- tunnel files ----
 
-func expandedConfig(name string) (string, error) {
+func loadTunnel(name string) (text string, c *config.Config, err error) {
 	path, err := userconf.Resolve(name)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	c, err := config.Load(path)
+	c, err = config.Load(path)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return c.WithExpandedApps()
+	text, err = c.WithExpandedApps()
+	return text, c, err
 }
 
 func (a *app) scanTunnels() bool {
 	names, _ := userconf.Names()
-	hashes := make(map[string]string, len(names))
+	files := make(map[string]tunnelFile, len(names))
 	for _, n := range names {
-		if text, err := expandedConfig(n); err == nil {
-			hashes[n] = ipc.ConfigHash(text)
+		text, c, err := loadTunnel(n)
+		if err != nil {
+			files[n] = tunnelFile{error: err.Error()}
+		} else {
+			files[n] = tunnelFile{hash: ipc.ConfigHash(text), cfg: c}
 		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	changed := strings.Join(names, "\x00") != strings.Join(a.tunnels, "\x00")
-	a.tunnels, a.hashes = names, hashes
+	changed := strings.Join(names, "\x00") != strings.Join(a.names, "\x00")
+	a.names, a.files = names, files
 	return changed
 }
 
@@ -402,57 +506,71 @@ func errorBox(format string, args ...any) {
 	windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR|windows.MB_SETFOREGROUND)
 }
 
-func (a *app) toggle(name string) {
+// run brings the tunnel up as a VPN or a proxy. A tunnel without a Proxy
+// address gets one written to its file first.
+func (a *app) run(name, as string) {
 	a.mu.Lock()
-	st := a.status
+	t := a.status.Find(name)
+	same := t.Running() && t.As == as
 	a.mu.Unlock()
-	if st.Tunnel == name && (st.State == ipc.StateUp || st.State == ipc.StateStarting) {
-		if _, err := call(ipc.Request{Op: ipc.OpDown}); err != nil {
-			errorBox("Could not disconnect %s:\n\n%v", name, err)
-		}
+	if same {
 		return
 	}
-	a.connect(name)
+	if as == ipc.AsProxy {
+		path, err := userconf.Resolve(name)
+		if err == nil {
+			_, err = userconf.EnsureProxy(path)
+		}
+		if err != nil {
+			errorBox("Could not pick a proxy port for %s:\n\n%v", name, err)
+			return
+		}
+	}
+	a.connect(name, as)
 }
 
-func (a *app) connect(name string) {
-	text, err := expandedConfig(name)
+func (a *app) connect(name, as string) {
+	text, _, err := loadTunnel(name)
 	if err != nil {
 		errorBox("%s has a problem:\n\n%v", name, err)
 		return
 	}
-	if _, err := call(ipc.Request{Op: ipc.OpUp, Name: name, Config: text}); err != nil {
+	if _, err := call(ipc.Request{Op: ipc.OpUp, Name: name, As: as, Config: text}); err != nil {
 		errorBox("Could not connect %s:\n\n%v", name, err)
 	}
 }
 
-func (a *app) apply() {
+// stop takes the tunnel down, or every tunnel when name is empty.
+func (a *app) stop(name string) {
 	a.mu.Lock()
-	name := a.status.Tunnel
+	t := a.status.Find(name)
 	a.mu.Unlock()
-	if name != "" {
-		a.connect(name)
+	if name != "" && t == nil {
+		return
+	}
+	if _, err := call(ipc.Request{Op: ipc.OpDown, Name: name}); err != nil {
+		errorBox("Could not disconnect:\n\n%v", err)
+	}
+}
+
+func (a *app) apply(name string) {
+	a.mu.Lock()
+	as := ""
+	if t := a.status.Find(name); t != nil {
+		as = t.As
+	}
+	a.mu.Unlock()
+	if as != "" {
+		a.connect(name, as)
 	}
 }
 
 func (a *app) toggleBoot() {
 	a.mu.Lock()
-	st := a.status
+	on := !a.status.Boot
 	a.mu.Unlock()
-	req := ipc.Request{Op: ipc.OpAutostart}
-	if st.Autostart == "" {
-		if st.State != ipc.StateUp {
-			return
-		}
-		text, err := expandedConfig(st.Tunnel)
-		if err != nil {
-			errorBox("%s has a problem:\n\n%v", st.Tunnel, err)
-			return
-		}
-		req.Name, req.Config = st.Tunnel, text
-	}
-	if _, err := call(req); err != nil {
-		errorBox("Could not change the boot tunnel:\n\n%v", err)
+	if _, err := call(ipc.Request{Op: ipc.OpBoot, Boot: on}); err != nil {
+		errorBox("Could not change boot start:\n\n%v", err)
 	}
 }
 
