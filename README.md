@@ -53,22 +53,39 @@ and continue in a new console window.
 Double-clicking `splitwire.exe`, or running `splitwire tray`, starts the
 notification area app. Its icon is gray when no tunnel runs, amber while
 one connects or disconnects, green when tunnels are up and red after a
-failure. The menu lists every tunnel in `%APPDATA%\splitwire`, each marked
-with how it runs (`Office - VPN`, `WARP - proxy 127.0.0.1:1080`). Each
-tunnel's submenu picks **VPN**, **Proxy** or **Off**, shows the last
-handshake and transfer, applies edits to a running tunnel and opens the
-file in Notepad. Picking VPN for one tunnel moves the previous VPN tunnel
-to Off; proxies stay up.
+failure. The menu:
 
-The menu also has:
+```
+Office VPN, WARP proxy 127.0.0.1:1080
+  Office (VPN): handshake 4s ago, received 1.20 GiB, sent 31.00 MiB
+  WARP (proxy 127.0.0.1:1080): handshake 9s ago, ...
+  Apply changes to WARP
+VPN: Office   >  Off / Office - include, 2 apps / WARP - ... (proxy now)
+Proxies         >  WARP - 127.0.0.1:1080 / backup - port picked from 1080 on first use
+Configure       >  <tunnel> > Edit configuration, Change proxy port..., Copy proxy address
+                   Open configuration folder, Import from WireGuard app...
+Disconnect all
+Reconnect tunnels at boot
+Start splitwire at sign-in
+Show manager log, Uninstall splitwire..., Quit
+```
 
-- **Reconnect at boot**: bring whatever runs back up when Windows starts,
-  keeping that list current as tunnels change.
-- **Start splitwire at sign-in**: open the app when you sign in.
-- **Disconnect all**, **Import from WireGuard app...**, **Show manager log**.
-- **Uninstall splitwire...**: remove the service, the split tunnel driver
-  and `%ProgramFiles%\splitwire`; configurations in `%APPDATA%\splitwire`
-  stay. Files in use go at the next restart.
+- **VPN** picks the one tunnel that routes apps by its `Mode`, or Off.
+- **Proxies** ticks any number of tunnels to serve as local proxies. A
+  tunnel runs one way at a time, so picking it in one list moves it out of
+  the other.
+- The top lines show each running tunnel's last handshake and transfer,
+  failures, and an **Apply changes** entry when a running tunnel's file was
+  edited.
+- **Configure** opens a tunnel's file in Notepad, changes its proxy port in
+  a small dialog that refuses ports another tunnel or program holds, and
+  copies its proxy address for pasting into an app's settings.
+- **Reconnect tunnels at boot** brings whatever runs back up when Windows
+  starts, before anyone signs in, through the manager service.
+- **Start splitwire at sign-in** opens the app when you sign in, through
+  your user's Run entry; the notification area exists only once you sign in.
+- **Uninstall splitwire...** removes everything, as `splitwire cleanup`
+  below, and asks whether to delete your tunnel configurations too.
 
 The first run asks to set splitwire up. Setup copies the executable to
 `%ProgramFiles%\splitwire\bin`, installs the manager service, turns on start
@@ -80,8 +97,7 @@ The manager service runs as SYSTEM and does the privileged work; the app
 runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
 you, SYSTEM and Administrators can open. The app reads your configurations
 and expands `%VARIABLES%` in `App` lines as you, so switching tunnels never
-prompts. When you edit a running tunnel's file, its submenu offers to apply
-the changes.
+prompts.
 
 The executable's manifest asks Windows 11 24H2 and later to start it
 without a console window unless a shell's console is there to share, so
@@ -134,7 +150,7 @@ tunnel, and stop while no VPN runs.
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
 | `manager install` | Install or update the manager service the app uses (`manager uninstall` removes it) |
 | `bootstrap` | Install the components without bringing a tunnel up |
-| `cleanup` | Remove the manager, the driver service, firewall objects and `%ProgramFiles%\splitwire` |
+| `cleanup [--configs]` | Uninstall everything (see below); `--configs` also deletes `%APPDATA%\splitwire` |
 
 `install` expands `%VARIABLES%` and globs in `App` lines as the installing
 user, because the service runs as SYSTEM with a different profile.
@@ -167,8 +183,40 @@ Everything lives in `%ProgramFiles%\splitwire`:
   which downloads about 256 KiB of the 134 MB file. It runs as the
   demand-start kernel service `mullvad-split-tunnel`.
 - `bin\splitwire.exe`, `configs\`, `logs\`: the installed app, which the
-  services run. `configs`
+  services run, and the services' configuration copies and logs. `configs`
   and `logs` are readable only by SYSTEM and Administrators.
+
+## Uninstalling
+
+`splitwire cleanup`, or **Uninstall splitwire...** in the menu, removes:
+
+- the manager service, every `splitwire$<name>` tunnel service and a
+  leftover `splitwire-wg-import` service
+- the `mullvad-split-tunnel` driver service, after resetting the driver
+- the splitwire firewall provider and sublayers
+- the WireGuardNT driver, unless the WireGuard app is installed and uses it
+- `%ProgramFiles%\splitwire`; files still in use, such as the running app,
+  are deleted at the next restart
+- the sign-in entry and the app's files in `%TEMP%`
+- with `--configs`, or when the menu's question is answered Yes,
+  `%APPDATA%\splitwire`
+
+Windows keeps a network profile entry for every network adapter it has
+seen, including the tunnels' adapters, under
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList`; splitwire
+leaves those, as the WireGuard app does.
+
+## Private keys
+
+Configurations are plain WireGuard `.conf` files, so Notepad and other
+WireGuard tools read them. `%APPDATA%\splitwire` is readable only by you,
+SYSTEM and Administrators. The copies the services keep in
+`%ProgramFiles%\splitwire\configs` are readable only by SYSTEM and
+Administrators. The WireGuard app also encrypts its copies with DPAPI for
+the SYSTEM account; that protects them from backups and copies of the
+files, but anyone with administrator rights can still decrypt them.
+Against a stolen or copied disk, the protection that works is BitLocker
+(or another full disk encryption), which covers every file at once.
 
 ## How it works
 

@@ -21,6 +21,14 @@ func TestSetKey(t *testing.T) {
 			"[Interface]\n\n[splitwire]  # options\nMode = full\n",
 			"[Interface]\n\n[splitwire]  # options\nProxy = 1080\nMode = full\n",
 		},
+		{
+			"[Interface]\n\n[Splitwire]\nMode = full\n\n[Splitwire]\n  proxy = 2000 # old\n",
+			"[Interface]\n\n[Splitwire]\nMode = full\n\n[Splitwire]\nProxy = 1080\n",
+		},
+		{
+			"[Interface]\n# Proxy = 9\n\n# [Splitwire]\n",
+			"[Interface]\n# Proxy = 9\n\n# [Splitwire]\n\n[Splitwire]\nProxy = 1080\n",
+		},
 	}
 	for i, c := range cases {
 		path := filepath.Join(dir, "t.conf")

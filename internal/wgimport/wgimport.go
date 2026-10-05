@@ -54,6 +54,36 @@ func wireguardConfigDir() (string, error) {
 	return filepath.Join(pf, "WireGuard", "Data", "Configurations"), nil
 }
 
+// AppInstalled reports whether the WireGuard app is installed.
+func AppInstalled() bool {
+	pf, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(pf, "WireGuard", "wireguard.exe"))
+	return err == nil
+}
+
+// RemoveHelperService deletes the decryption service when an interrupted
+// import left it behind.
+func RemoveHelperService() error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(helperService)
+	if err != nil {
+		return nil
+	}
+	defer s.Close()
+	s.Control(svc.Stop)
+	if err := s.Delete(); err != nil {
+		return fmt.Errorf("delete %s: %w", helperService, err)
+	}
+	return nil
+}
+
 // Available lists the tunnel names stored by the WireGuard app.
 func Available() ([]string, error) {
 	dir, err := wireguardConfigDir()

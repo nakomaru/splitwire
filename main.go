@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
+	"golang.zx2c4.com/wireguard/windows/driver"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
 	"splitwire/internal/bootstrap"
@@ -61,7 +62,7 @@ Usage:
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
   splitwire manager install|uninstall   Set up or remove the service the notification area app uses
-  splitwire cleanup                     Remove services, the driver, firewall objects and files
+  splitwire cleanup [--configs]         Uninstall everything; --configs also deletes your tunnel files
   splitwire version
 
 A <tunnel> is a name, for %APPDATA%\splitwire\<name>.conf, or a path to a .conf file.
@@ -253,7 +254,11 @@ func run(args []string) error {
 		if len(args) != 2 || (args[1] != "install" && args[1] != "uninstall") {
 			return errors.New("usage: splitwire manager install|uninstall")
 		}
-	case "status", "bootstrap", "cleanup":
+	case "cleanup":
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--configs") {
+			return errors.New("usage: splitwire cleanup [--configs]")
+		}
+	case "status", "bootstrap":
 	default:
 		return fmt.Errorf("unknown command %q; run splitwire help", args[0])
 	}
@@ -292,7 +297,7 @@ func run(args []string) error {
 	case "bootstrap":
 		return bootstrapAll()
 	case "cleanup":
-		return cleanup()
+		return cleanup(len(args) > 1)
 	}
 	return nil
 }
@@ -620,20 +625,26 @@ func bootstrapAll() error {
 	return nil
 }
 
-func cleanup() error {
+// cleanup removes everything splitwire installed: its services, the split
+// tunnel driver, firewall objects, Program Files\splitwire, the sign-in
+// entry and temporary files. The WireGuardNT driver goes too unless the
+// WireGuard app, which shares it, is installed. With configs, the tunnel
+// configurations in %APPDATA%\splitwire go as well.
+func cleanup(configs bool) error {
 	installed, err := service.List()
 	if err != nil {
 		return err
 	}
-	if len(installed) > 0 {
-		names := make([]string, len(installed))
-		for i, in := range installed {
-			names[i] = in.Tunnel
+	for _, in := range installed {
+		if err := service.Uninstall(in.Tunnel); err != nil {
+			return err
 		}
-		return fmt.Errorf("uninstall these tunnels first: %s", strings.Join(names, ", "))
 	}
 	if err := manager.Uninstall(); err != nil {
 		return err
+	}
+	if err := wgimport.RemoveHelperService(); err != nil {
+		log.Printf("Warning: %v", err)
 	}
 	drv, err := stdriver.Open()
 	switch {
@@ -651,6 +662,8 @@ func cleanup() error {
 	if err := firewall.RemoveSublayers(); err != nil {
 		log.Printf("Warning: remove firewall sublayers: %v", err)
 	}
+	removeWireGuardNT()
+
 	root, err := bootstrap.Root()
 	if err != nil {
 		return err
@@ -664,6 +677,47 @@ func cleanup() error {
 	} else {
 		log.Printf("Removed %s", root)
 	}
-	log.Printf("The WireGuardNT driver stays installed; the WireGuard app shares it")
+
+	if err := tray.RemoveRunAtLogin(); err != nil {
+		log.Printf("Warning: remove the sign-in entry: %v", err)
+	}
+	tray.RemoveTempFiles()
+	if configs {
+		dir, err := userconf.Dir()
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove %s: %w", dir, err)
+		}
+		log.Printf("Removed %s", dir)
+	} else if dir, err := userconf.Dir(); err == nil {
+		log.Printf("Kept the tunnel configurations in %s", dir)
+	}
 	return nil
+}
+
+// removeWireGuardNT deletes the WireGuardNT driver when the WireGuard app
+// is not installed. The driver refuses while any WireGuard adapter exists.
+func removeWireGuardNT() {
+	if wgimport.AppInstalled() {
+		log.Printf("The WireGuardNT driver stays installed; the WireGuard app uses it")
+		return
+	}
+	dll, err := bootstrap.DLLPath()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(dll); err != nil {
+		return
+	}
+	if err := bootstrap.LoadWireGuardDLL(dll); err != nil {
+		log.Printf("Warning: %v", err)
+		return
+	}
+	if err := driver.Uninstall(); err != nil {
+		log.Printf("Warning: remove the WireGuardNT driver: %v", err)
+		return
+	}
+	log.Printf("Removed the WireGuardNT driver")
 }

@@ -112,6 +112,32 @@ func Names() ([]string, error) {
 // FirstProxyPort is the lowest port EnsureProxy assigns.
 const FirstProxyPort = 1080
 
+// claimedPorts lists the Proxy ports of the tunnels in Dir other than the
+// one at path, by tunnel name.
+func claimedPorts(path string) map[uint16]string {
+	claimed := make(map[uint16]string)
+	names, _ := Names()
+	for _, n := range names {
+		other, err := Resolve(n)
+		if err != nil || strings.EqualFold(other, path) {
+			continue
+		}
+		if oc, err := config.Load(other); err == nil && oc.Proxy.IsValid() {
+			claimed[oc.Proxy.Port()] = n
+		}
+	}
+	return claimed
+}
+
+func portFree(ap netip.AddrPort) bool {
+	ln, err := net.Listen("tcp", ap.String())
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
 // EnsureProxy returns the Proxy address of the configuration at path. A
 // configuration without one gets the lowest port from FirstProxyPort up
 // that no other tunnel in Dir claims and nothing listens on, written to its
@@ -124,27 +150,12 @@ func EnsureProxy(path string) (netip.AddrPort, error) {
 	if c.Proxy.IsValid() {
 		return c.Proxy, nil
 	}
-	claimed := make(map[uint16]bool)
-	names, _ := Names()
-	for _, n := range names {
-		other, err := Resolve(n)
-		if err != nil || strings.EqualFold(other, path) {
-			continue
-		}
-		if oc, err := config.Load(other); err == nil && oc.Proxy.IsValid() {
-			claimed[oc.Proxy.Port()] = true
-		}
-	}
+	claimed := claimedPorts(path)
 	for port := FirstProxyPort; port <= 65535; port++ {
-		if claimed[uint16(port)] {
-			continue
-		}
 		ap := netip.AddrPortFrom(config.ProxyHost, uint16(port))
-		ln, err := net.Listen("tcp", ap.String())
-		if err != nil {
+		if claimed[uint16(port)] != "" || !portFree(ap) {
 			continue
 		}
-		ln.Close()
 		if err := setKey(path, "Proxy", strconv.Itoa(port)); err != nil {
 			return netip.AddrPort{}, err
 		}
@@ -153,8 +164,41 @@ func EnsureProxy(path string) (netip.AddrPort, error) {
 	return netip.AddrPort{}, fmt.Errorf("no free port for the proxy")
 }
 
-// setKey adds key = val to the file's first [Splitwire] section, or to a
-// new one at the end.
+// SetProxyPort changes the port of the configuration's Proxy address,
+// keeping its IP address. running tells that the tunnel's own proxy holds
+// the current port, which then counts as free.
+func SetProxyPort(path string, port uint16, running bool) error {
+	if port == 0 {
+		return fmt.Errorf("the port must be 1 to 65535")
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	host := config.ProxyHost
+	if c.Proxy.IsValid() {
+		host = c.Proxy.Addr()
+		if c.Proxy.Port() == port {
+			return nil
+		}
+	}
+	if other := claimedPorts(path)[port]; other != "" {
+		return fmt.Errorf("port %d belongs to %s", port, other)
+	}
+	ap := netip.AddrPortFrom(host, port)
+	if !portFree(ap) && !(running && c.Proxy == ap) {
+		return fmt.Errorf("another program is using port %d", port)
+	}
+	val := strconv.Itoa(int(port))
+	if host != config.ProxyHost {
+		val = ap.String()
+	}
+	return setKey(path, "Proxy", val)
+}
+
+// setKey sets key = val in the file's [Splitwire] sections: it replaces the
+// key's line when one exists, and otherwise adds the line to the first
+// section, or to a new one at the end.
 func setKey(path, key, val string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -167,12 +211,26 @@ func setKey(path, key, val string) error {
 	}
 	lines := strings.Split(text, nl)
 	entry := key + " = " + val
+	first := -1
+	inSection := false
 	for i, line := range lines {
 		code, _, _ := strings.Cut(line, "#")
-		if strings.EqualFold(strings.TrimSpace(code), "[Splitwire]") {
-			lines = append(lines[:i+1], append([]string{entry}, lines[i+1:]...)...)
+		stripped := strings.TrimSpace(code)
+		if strings.HasPrefix(stripped, "[") && !strings.Contains(stripped, "=") {
+			inSection = strings.EqualFold(stripped, "[Splitwire]")
+			if inSection && first < 0 {
+				first = i
+			}
+			continue
+		}
+		if k, _, ok := strings.Cut(stripped, "="); inSection && ok && strings.EqualFold(strings.TrimSpace(k), key) {
+			lines[i] = entry
 			return os.WriteFile(path, []byte(strings.Join(lines, nl)), 0o600)
 		}
+	}
+	if first >= 0 {
+		lines = append(lines[:first+1], append([]string{entry}, lines[first+1:]...)...)
+		return os.WriteFile(path, []byte(strings.Join(lines, nl)), 0o600)
 	}
 	text = strings.TrimRight(text, "\r\n") + nl + nl + "[Splitwire]" + nl + entry + nl
 	return os.WriteFile(path, []byte(text), 0o600)

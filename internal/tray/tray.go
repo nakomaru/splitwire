@@ -199,8 +199,19 @@ func ask(text string) bool {
 	return r == idYes
 }
 
-// idYes is MessageBox's IDYES result.
-const idYes = 6
+// askNo asks a yes or no question with No as the default button.
+func askNo(text string) bool {
+	t, _ := windows.UTF16PtrFromString(text)
+	caption, _ := windows.UTF16PtrFromString("splitwire")
+	r, _ := windows.MessageBox(0, t, caption, windows.MB_YESNO|windows.MB_ICONWARNING|mbDefButton2|windows.MB_SETFOREGROUND)
+	return r == idYes
+}
+
+// MessageBox values.
+const (
+	idYes        = 6
+	mbDefButton2 = 0x00000100
+)
 
 // runElevated runs a CLI command of exe elevated in a console window that
 // stays open on failure, so its error is readable there. It reports
@@ -264,12 +275,19 @@ func (a *app) setup() {
 
 func (a *app) uninstall() {
 	if !ask("Uninstall splitwire?\n\n" +
-		"This disconnects every tunnel and removes the service, the split tunnel " +
-		"driver and Program Files\\splitwire. Your configurations in " +
-		"%APPDATA%\\splitwire stay. Windows asks for administrator rights.") {
+		"This disconnects every tunnel and removes everything splitwire installed: " +
+		"its services, the split tunnel driver, its firewall objects, " +
+		"Program Files\\splitwire and the sign-in entry. The WireGuardNT driver " +
+		"stays when the WireGuard app is installed. Windows asks for administrator rights.") {
 		return
 	}
-	if !runElevated(selfExe(), "cleanup") {
+	args := []string{"cleanup"}
+	if askNo("Also delete your tunnel configurations in %APPDATA%\\splitwire?\n\n" +
+		"They hold your private keys. Keep them to set splitwire up again later " +
+		"or to import them elsewhere.") {
+		args = append(args, "--configs")
+	}
+	if !runElevated(selfExe(), args...) {
 		return
 	}
 	setRunAtLogin(false)
@@ -309,6 +327,20 @@ func setRunAtLogin(on bool) error {
 		}
 	}
 	return k.SetStringValue(runValue, windows.EscapeArg(exe)+" "+Command)
+}
+
+// RemoveRunAtLogin deletes the sign-in entry.
+func RemoveRunAtLogin() error { return setRunAtLogin(false) }
+
+// RemoveTempFiles deletes the app's files in the temporary folder: the
+// copied manager log and the icons the menu library writes there.
+func RemoveTempFiles() {
+	tmp := os.TempDir()
+	os.Remove(filepath.Join(tmp, logCopy))
+	icons, _ := filepath.Glob(filepath.Join(tmp, "systray_temp_icon_*"))
+	for _, p := range icons {
+		os.Remove(p)
+	}
 }
 
 func (a *app) toggleLogin() {
