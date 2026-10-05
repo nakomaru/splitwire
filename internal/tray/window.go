@@ -89,7 +89,7 @@ type window struct {
 	title, rename, status, banner, reconnect            *control
 	segOff, segVPN, segProxy                            *control
 	tabs                                                [3]*control
-	problem                                             *control
+	problem, hApps, appsNote                            *control
 	modeFull, modeInclude, modeExclude                  *control
 	appList, appAdd, appRemove, appHint                 *control
 	hVPN, kill, lan, dns, hProxy, portLabel, port       *control
@@ -199,6 +199,8 @@ func newWindow(a *app) *window {
 	}
 	w.problem = f.add(&control{kind: kindLabel, color: labelError, wrap: true})
 
+	w.hApps = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Apps that use it as the VPN"})
+	w.appsNote = f.add(&control{kind: kindLabel, color: labelSubtle, text: "As a proxy, it carries any app set to use its address."})
 	w.modeFull = f.add(&control{kind: kindRadio, text: "All apps, routed by AllowedIPs"})
 	w.modeInclude = f.add(&control{kind: kindRadio, text: "Only the apps below"})
 	w.modeExclude = f.add(&control{kind: kindRadio, text: "All apps except the apps below"})
@@ -311,6 +313,10 @@ func (w *window) layout(cw, ch int32) {
 
 	// Apps tab.
 	ay := y
+	f.place(w.hApps, rect{x0, ay, x1, ay + s(22)})
+	ay += s(22)
+	f.place(w.appsNote, rect{x0, ay, x1, ay + s(20)})
+	ay += s(28)
 	for _, c := range []*control{w.modeFull, w.modeInclude, w.modeExclude} {
 		f.place(c, rect{x0, ay, x0 + f.toggleWidth(c), ay + s(28)})
 		ay += s(30)
@@ -693,7 +699,7 @@ func (w *window) showTab(i int) {
 	}
 	formOK := w.sel != "" && w.cfg != nil
 	f.show(w.problem, w.sel != "" && w.cfgErr != nil && i != tabText)
-	for _, c := range []*control{w.modeFull, w.modeInclude, w.modeExclude, w.appList, w.appAdd, w.appRemove, w.appHint} {
+	for _, c := range []*control{w.hApps, w.appsNote, w.modeFull, w.modeInclude, w.modeExclude, w.appList, w.appAdd, w.appRemove, w.appHint} {
 		f.show(c, formOK && i == tabApps)
 	}
 	for _, c := range []*control{w.hVPN, w.kill, w.lan, w.dns, w.hProxy, w.portLabel, w.port, w.portNote, w.copyAddr,

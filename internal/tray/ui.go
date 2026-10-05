@@ -624,8 +624,10 @@ func (f *form) showWindow(c *control) {
 	if c.kind == kindList && c.empty != "" && f.listCount(c) == 0 {
 		on = false
 	}
-	visible, _, _ := procIsWindowVisible.Call(c.hwnd)
-	if on == (visible != 0) {
+	// The style bit is the control's own visibility; IsWindowVisible also
+	// reports false while the form itself is hidden.
+	style, _, _ := procGetWindowLongPtrW.Call(c.hwnd, ^uintptr(15)) // GWL_STYLE is -16
+	if on == (style&wsVisible != 0) {
 		return
 	}
 	cmd := uintptr(swHide)
