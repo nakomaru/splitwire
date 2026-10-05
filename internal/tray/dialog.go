@@ -1,9 +1,7 @@
 package tray
 
 import (
-	"fmt"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -222,7 +220,9 @@ func lines(text string, width int) int {
 
 // dialogSpec drives the open dialog; dialogs run one at a time.
 type dialogSpec struct {
-	init func(hwnd uintptr)
+	// owner is the window the dialog belongs to, disabled while it is open.
+	owner uintptr
+	init  func(hwnd uintptr)
 	// ok reads the dialog when OK is pressed; false keeps it open.
 	ok func(hwnd uintptr) bool
 	// subtle lists the static controls drawn in the secondary text color.
@@ -281,7 +281,7 @@ func runDialog(t *dlgTemplate, spec *dialogSpec) bool {
 	openDialog = spec
 	var instance windows.Handle
 	windows.GetModuleHandleEx(0, nil, &instance)
-	r, _, _ := procDialogBoxIndirectParamW.Call(uintptr(instance), uintptr(unsafe.Pointer(&t.w[0])), 0, dialogProc, 0)
+	r, _, _ := procDialogBoxIndirectParamW.Call(uintptr(instance), uintptr(unsafe.Pointer(&t.w[0])), spec.owner, dialogProc, 0)
 	runtime.KeepAlive(t)
 	return r == idOK
 }
@@ -468,45 +468,35 @@ func warnBox(hwnd uintptr, text string) {
 	windows.MessageBox(windows.HWND(hwnd), t, caption, windows.MB_OK|windows.MB_ICONWARNING)
 }
 
-// askPort shows a dialog for a port number. validate rejects an entry
-// with an error, which the dialog shows while it stays open. It reports
-// false when canceled.
-func askPort(title, prompt string, current uint16, validate func(uint16) error) (uint16, bool) {
+// askText shows a dialog for a line of text, owned by owner. validate
+// rejects an entry with an error, which the dialog shows while it stays
+// open. It reports false when canceled.
+func askText(owner uintptr, title, prompt, initial string, validate func(string) error) (string, bool) {
 	promptHeight := lines(prompt, charsPerLine) * lineHeight
 	editY := dialogMargin + promptHeight + 4
 	buttonY := editY + 20
 	t := newTemplate(title, buttonY+buttonHeight+dialogMargin)
 	t.control(classStatic, idIntro, ssNoPrefix, dialogMargin, dialogMargin, contentWidth, promptHeight, prompt)
-	t.controlEx(classEdit, idEdit, wsTabStop|esNumber|esAutoHScroll, wsExClientEdge, dialogMargin, editY, 60, 14, "")
+	t.controlEx(classEdit, idEdit, wsTabStop|esAutoHScroll, wsExClientEdge, dialogMargin, editY, contentWidth, 14, "")
 	t.buttons(buttonY, "OK")
 
-	initial := ""
-	if current != 0 {
-		initial = strconv.Itoa(int(current))
-	}
-	var result uint16
-	spec := &dialogSpec{}
+	var result string
+	spec := &dialogSpec{owner: owner}
 	spec.init = func(hwnd uintptr) {
 		themeControls(hwnd, spec.palette, []uintptr{idEdit, idOK, idCancel})
 		text, _ := windows.UTF16PtrFromString(initial)
 		procSetDlgItemTextW.Call(hwnd, idEdit, uintptr(unsafe.Pointer(text)))
-		procSendDlgItemMessageW.Call(hwnd, idEdit, emLimitText, 5, 0)
+		procSendDlgItemMessageW.Call(hwnd, idEdit, emSetSel, 0, ^uintptr(0))
 		layout(hwnd, spec, []row{{id: idIntro, text: prompt}, {id: idEdit, gap: 6}}, 10)
 	}
 	spec.ok = func(hwnd uintptr) bool {
-		var buf [8]uint16
-		procGetDlgItemTextW.Call(hwnd, idEdit, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-		port, err := strconv.ParseUint(windows.UTF16ToString(buf[:]), 10, 16)
-		if err != nil || port == 0 {
-			err = fmt.Errorf("enter a port from 1 to 65535")
-		} else {
-			err = validate(uint16(port))
-		}
-		if err != nil {
+		edit, _, _ := procGetDlgItem.Call(hwnd, idEdit)
+		text := strings.TrimSpace(windowText(edit))
+		if err := validate(text); err != nil {
 			warnBox(hwnd, err.Error())
 			return false
 		}
-		result = uint16(port)
+		result = text
 		return true
 	}
 	ok := runDialog(t, spec)
@@ -528,6 +518,11 @@ type option struct {
 // false when canceled. Each checkbox's label is a separate static control
 // that toggles it, so the label follows the dialog's text colors.
 func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
+	return askOptionsOwned(0, title, intro, opts, ok)
+}
+
+// askOptionsOwned is askOptions with a window that owns the dialog.
+func askOptionsOwned(owner uintptr, title, intro string, opts []option, ok string) ([]bool, bool) {
 	introHeight := lines(intro, charsPerLine) * lineHeight
 	y := dialogMargin + introHeight + 6
 	type placed struct{ y, detailHeight int }
@@ -560,7 +555,7 @@ func askOptions(title, intro string, opts []option, ok string) ([]bool, bool) {
 	t.buttons(buttonY, ok)
 
 	states := make([]bool, len(opts))
-	spec := &dialogSpec{subtle: make(map[uintptr]bool), labels: make(map[uintptr]uintptr)}
+	spec := &dialogSpec{owner: owner, subtle: make(map[uintptr]bool), labels: make(map[uintptr]uintptr)}
 	spec.init = func(hwnd uintptr) {
 		item := func(id int) uintptr { h, _, _ := procGetDlgItem.Call(hwnd, uintptr(id)); return h }
 		ids := []uintptr{idOK, idCancel}

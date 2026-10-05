@@ -19,8 +19,9 @@ Any tunnel runs one of two ways:
 ## Quick start
 
 Double-click `splitwire.exe`. It offers to set itself up, which asks for
-administrator rights once, then sits in the notification area with every
-tunnel in its menu. "Import from WireGuard app..." copies existing tunnels.
+administrator rights once, then opens its window and sits in the
+notification area. In the window, **Add** imports existing tunnels from the
+WireGuard app or a file, creates a WARP tunnel, or starts an empty one.
 
 From a shell:
 
@@ -48,22 +49,60 @@ imports that tunnel by itself when its file does not exist yet.
 Commands that change the system ask for administrator rights through UAC
 and continue in a new console window.
 
+## The window
+
+Starting splitwire, from the Start menu or by double-clicking it, opens its
+window; so does clicking the notification area icon. Starting it again
+while it runs brings the window back. At sign-in it starts in the
+background.
+
+The window lists the tunnels on the left, each with a dot for its state:
+green while it runs as the VPN, blue as a proxy, amber while it connects,
+red after a failure or for a file with a problem. **Add** creates or
+imports tunnels and opens the configuration folder; **Delete** moves a
+tunnel's file to the Recycle Bin. Right-clicking a tunnel connects,
+disconnects, renames (F2) or deletes (Del) it.
+
+For the selected tunnel:
+
+- **Off, VPN and Proxy** run it one way or stop it. The line under its name
+  shows the connection, and while it runs a graph shows the received and
+  sent rates of the last three minutes with the totals. A tunnel edited
+  since it connected offers **Reconnect**.
+- **Apps** picks the mode: all apps, only the listed apps, or all but the
+  listed apps. **Add apps** offers the programs running now, the ones
+  Explorer recorded as recently started (when Windows tracks app launches)
+  and the Start menu's, with a search box that also takes a typed path or
+  pattern, and **Browse...**. Folders named for a version become `*`, so
+  `...\Discord\app-1.0.9163\Discord.exe` is added as
+  `...\Discord\app-*\Discord.exe` and keeps working after updates. Each
+  entry shows its icon and name, and warns when it matches no file. With
+  all apps picked, the list stays in the file for the other two choices.
+- **Options** sets the kill switch, the local network exception, strict
+  DNS, the proxy port (refusing ports another tunnel or program holds) and
+  routing the proxy through the VPN, and shows the public key, addresses
+  and endpoint, with buttons to copy the key and the proxy address.
+- **Text** edits the whole file, checking it on every keystroke and naming
+  the line of a problem; **Save** (Ctrl+S) is ready once it checks out.
+
+The window writes each change straight to the file, keeping its comments,
+so the file stays the one source of truth and other editors can open it
+too. Changes reach a running tunnel when it reconnects.
+
 ## Notification area app
 
-Double-clicking `splitwire.exe`, or running `splitwire tray`, starts the
-notification area app. Its icon is gray when no tunnel runs, amber while
-one connects or disconnects, green when tunnels are up and red after a
-failure. The menu:
+The icon is gray when no tunnel runs, amber while one connects or
+disconnects, green when tunnels are up and red after a failure. Clicking it
+opens the window; right-clicking shows the menu:
 
 ```
 Office VPN, WARP proxy 127.0.0.1:1080
   Office (VPN): handshake 4s ago, received 1.20 GiB, sent 31.00 MiB
   WARP (proxy 127.0.0.1:1080): handshake 9s ago, ...
   Apply changes to WARP
+Open splitwire
 VPN: Office   >  Off / Office - include, 2 apps / WARP - ... (proxy now)
 Proxies         >  WARP - 127.0.0.1:1080 / backup - port picked from 1080 on first use
-Configure       >  <tunnel> > Edit configuration, Change proxy port..., Copy proxy address
-                   Open configuration folder, Import from WireGuard app...
 Disconnect all
 Reconnect tunnels at boot
 Start splitwire at sign-in
@@ -77,9 +116,6 @@ Show manager log, Uninstall splitwire..., Quit
 - The top lines show each running tunnel's last handshake and transfer,
   failures, and an **Apply changes** entry when a running tunnel's file was
   edited.
-- **Configure** opens a tunnel's file in Notepad, changes its proxy port in
-  a small dialog that refuses ports another tunnel or program holds, and
-  copies its proxy address for pasting into an app's settings.
 - **Reconnect tunnels at boot** brings whatever runs back up when Windows
   starts, before anyone signs in, through the manager service.
 - **Start splitwire at sign-in** opens the app when you sign in, through
@@ -94,8 +130,8 @@ rights once. Every install also puts in place the WireGuard driver
 first adapter, so setup creates a temporary one) and Mullvad's open source
 split tunnel driver, and the window says so.
 
-- **Add splitwire to the Start menu**: your own Start menu; only the installing
-  user can control the service, so other accounts get no shortcut.
+- **Add splitwire to the Start menu**: your own Start menu; each user who
+  runs setup gets their own.
 - **Start splitwire at sign-in**.
 - **Reconnect tunnels at boot**: the menu changes it later too.
 - **Import tunnels from the WireGuard app**, when that app is installed (on
@@ -112,9 +148,10 @@ update can change them too; an identical copy opens the installed app.
 Installing cancels deletions that an earlier uninstall left for the next
 restart, so a reinstall before restarting stays.
 
-The dialogs and the notification area menu follow the Windows light or
-dark mode, in the colors of Windows 11 dialogs, with the primary button in
-the system accent color. High contrast themes keep the system colors.
+The window, the dialogs and the notification area menu follow the Windows
+light or dark mode, in the colors of Windows 11, with the primary buttons
+and selections in the system accent color. High contrast themes keep the
+system colors.
 
 The manager service runs as SYSTEM and does the privileged work; the app
 runs as you and talks to it over the pipe `\\.\pipe\splitwire`, which only
@@ -175,7 +212,7 @@ tunnel, and stop while no VPN runs.
 
 | Command | Effect |
 |---|---|
-| (none), `tray` | Start the notification area app |
+| (none), `tray` | Start the app and open its window; `tray --background` starts it without the window, as at sign-in |
 | `import [--force] [name...]` | Copy tunnels from the WireGuard app; existing files stay unless `--force` |
 | `up <tunnel>` | Run a tunnel in the console until Ctrl+C |
 | `warp [name]` | Register a free Cloudflare WARP device and save it as a tunnel, `WARP` by default |
@@ -228,7 +265,7 @@ Everything lives in `%ProgramFiles%\splitwire`:
 
 ## WARP tunnels
 
-**Configure > Create WARP tunnel...**, or `splitwire warp`, registers a free
+**Add > Create a WARP tunnel...** in the window, or `splitwire warp`, registers a free
 device with Cloudflare WARP and saves it as a tunnel named `WARP` (or
 `WARP-2` and so on). It speaks the registration API of Cloudflare's WARP
 app, which Cloudflare does not document and could change; wgcf and similar

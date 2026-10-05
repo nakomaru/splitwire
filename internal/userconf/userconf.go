@@ -16,8 +16,17 @@ import (
 	"splitwire/internal/config"
 )
 
+// testDir replaces the configuration folder in tests.
+var testDir string
+
+// UseDir makes Dir return dir, for tests.
+func UseDir(dir string) { testDir = dir }
+
 // Dir is the configuration folder, %APPDATA%\splitwire.
 func Dir() (string, error) {
+	if testDir != "" {
+		return testDir, nil
+	}
 	appData, err := windows.KnownFolderPath(windows.FOLDERID_RoamingAppData, 0)
 	if err != nil {
 		return "", fmt.Errorf("locate AppData: %w", err)
@@ -196,43 +205,21 @@ func SetProxyPort(path string, port uint16, running bool) error {
 	return setKey(path, "Proxy", val)
 }
 
-// setKey sets key = val in the file's [Splitwire] sections: it replaces the
-// key's line when one exists, and otherwise adds the line to the first
-// section, or to a new one at the end.
+// setKey sets key = val in the file's [Splitwire] section.
 func setKey(path, key, val string) error {
+	return Update(path, func(text string) string { return config.SetValue(text, key, val, false) })
+}
+
+// Update rewrites the file at path with edit applied to its text.
+func Update(path string, edit func(string) string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	text := string(b)
-	nl := "\n"
-	if strings.Contains(text, "\r\n") {
-		nl = "\r\n"
+	text := edit(string(b))
+	if text == string(b) {
+		return nil
 	}
-	lines := strings.Split(text, nl)
-	entry := key + " = " + val
-	first := -1
-	inSection := false
-	for i, line := range lines {
-		code, _, _ := strings.Cut(line, "#")
-		stripped := strings.TrimSpace(code)
-		if strings.HasPrefix(stripped, "[") && !strings.Contains(stripped, "=") {
-			inSection = strings.EqualFold(stripped, "[Splitwire]")
-			if inSection && first < 0 {
-				first = i
-			}
-			continue
-		}
-		if k, _, ok := strings.Cut(stripped, "="); inSection && ok && strings.EqualFold(strings.TrimSpace(k), key) {
-			lines[i] = entry
-			return os.WriteFile(path, []byte(strings.Join(lines, nl)), 0o600)
-		}
-	}
-	if first >= 0 {
-		lines = append(lines[:first+1], append([]string{entry}, lines[first+1:]...)...)
-		return os.WriteFile(path, []byte(strings.Join(lines, nl)), 0o600)
-	}
-	text = strings.TrimRight(text, "\r\n") + nl + nl + "[Splitwire]" + nl + entry + nl
 	return os.WriteFile(path, []byte(text), 0o600)
 }
 

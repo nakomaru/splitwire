@@ -51,7 +51,7 @@ const version = "0.4.0"
 const usage = `splitwire ` + version + ` - WireGuard with per-app split tunneling
 
 Usage:
-  splitwire                             Open the notification area app (also by double-clicking)
+  splitwire                             Open the app and its window (also by double-clicking)
   splitwire import [--force] [name...]  Copy tunnels from the WireGuard app
   splitwire up <tunnel>                 Run a tunnel in this console until Ctrl+C
   splitwire proxy <tunnel>              Run a tunnel as a local proxy in this console until Ctrl+C

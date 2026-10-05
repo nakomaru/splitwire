@@ -3,7 +3,6 @@ package tray
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +17,6 @@ import (
 	"splitwire/internal/ipc"
 	"splitwire/internal/svcwait"
 	"splitwire/internal/userconf"
-	"splitwire/internal/warp"
 )
 
 // Connection states between the tray and the manager.
@@ -48,6 +46,15 @@ type app struct {
 	retry   chan struct{}
 	gen     chan struct{}
 
+	// traffic holds the recent counters of running tunnels.
+	traffic map[string]*traffic
+	// win is the tunnels window, or windowCreating while it opens, and
+	// winSelect a tunnel for it to select.
+	win       uintptr
+	winSelect string
+	// openAtStart opens the window once the app is ready.
+	openAtStart bool
+
 	setupOnce sync.Once
 	// next starts with nextArgs once the menu loop ends.
 	next     string
@@ -73,19 +80,26 @@ func newApp() *app {
 			"up":    icoBytes(colorUp),
 			"error": icoBytes(colorError),
 		},
-		files: make(map[string]tunnelFile),
-		retry: make(chan struct{}, 1),
-		menus: make(map[string]*tunnelMenu),
+		files:   make(map[string]tunnelFile),
+		traffic: make(map[string]*traffic),
+		retry:   make(chan struct{}, 1),
+		menus:   make(map[string]*tunnelMenu),
 	}
 }
 
 func (a *app) ready() {
 	systray.SetIcon(a.icons["down"])
 	systray.SetTooltip("splitwire")
+	// A click on the icon opens the window; a right click shows the menu.
+	systray.SetOnTapped(func() { go a.openWindow() })
 	a.scanTunnels()
 	a.rebuild()
 	go a.watchFolder()
 	go a.watchManager()
+	// Before setup the install window comes first.
+	if a.openAtStart && svcwait.Exists(ipc.ServiceName) {
+		go a.openWindow()
+	}
 }
 
 // ---- manager connection ----
@@ -100,6 +114,7 @@ func (a *app) setLink(link int, err string) {
 func (a *app) setStatus(st ipc.Status) {
 	a.mu.Lock()
 	a.status = st
+	a.recordTraffic(st)
 	a.refreshLocked()
 	a.mu.Unlock()
 }
@@ -315,78 +330,6 @@ func (a *app) vpnOff() {
 	}
 }
 
-// changePort asks for a new proxy port, writes it to the tunnel's file and
-// reconnects a running proxy on it.
-func (a *app) changePort(name string) {
-	path, err := userconf.Resolve(name)
-	if err != nil {
-		errorBox("%v", err)
-		return
-	}
-	a.mu.Lock()
-	t := a.status.Find(name)
-	proxied := t.Running() && t.As == ipc.AsProxy
-	var current uint16
-	if f := a.files[name]; f.cfg != nil && f.cfg.Proxy.IsValid() {
-		current = f.cfg.Proxy.Port()
-	}
-	a.mu.Unlock()
-	if current == 0 {
-		ap, err := userconf.EnsureProxy(path)
-		if err != nil {
-			errorBox("Could not pick a proxy port for %s:\n\n%v", name, err)
-			return
-		}
-		current = ap.Port()
-	}
-	prompt := fmt.Sprintf("Port for the %s proxy. Update apps that use the old one.", name)
-	if _, ok := askPort("Proxy port: "+name, prompt, current, func(port uint16) error {
-		return userconf.SetProxyPort(path, port, proxied)
-	}); !ok {
-		return
-	}
-	if proxied {
-		a.connect(name, ipc.AsProxy)
-	}
-}
-
-// createWARP registers a Cloudflare WARP device and saves it as a tunnel,
-// which the folder watcher then adds to the menu.
-func (a *app) createWARP() {
-	if _, ok := askOptions("Create WARP tunnel",
-		"Registers a free device with Cloudflare WARP and saves it as a tunnel. It uses the "+
-			"registration of Cloudflare's own app, which is unofficial and could change.",
-		nil, "Create"); !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	d, err := warp.Register(ctx)
-	if err != nil {
-		errorBox("Could not create a WARP tunnel:\n\n%v", err)
-		return
-	}
-	name, err := userconf.CreateNew("WARP", d.Config())
-	if err != nil {
-		warp.Delete(ctx, d.ID, d.Token)
-		errorBox("Could not save the WARP tunnel:\n\n%v", err)
-		return
-	}
-	infoBox("Created the tunnel %s. Pick it under VPN or Proxies.", name)
-}
-
-func (a *app) copyAddress(name string) {
-	a.mu.Lock()
-	f := a.files[name]
-	a.mu.Unlock()
-	if f.cfg == nil || !f.cfg.Proxy.IsValid() {
-		return
-	}
-	if err := copyText(f.cfg.Proxy.String()); err != nil {
-		errorBox("Could not copy:\n\n%v", err)
-	}
-}
-
 func (a *app) toggleBoot() {
 	a.mu.Lock()
 	on := !a.status.Boot
@@ -394,15 +337,6 @@ func (a *app) toggleBoot() {
 	if _, err := call(ipc.Request{Op: ipc.OpBoot, Boot: on}); err != nil {
 		errorBox("Could not change boot start:\n\n%v", err)
 	}
-}
-
-func (a *app) edit(name string) {
-	path, err := userconf.Resolve(name)
-	if err != nil {
-		errorBox("%v", err)
-		return
-	}
-	exec.Command("notepad.exe", path).Start()
 }
 
 func (a *app) openFolder() {

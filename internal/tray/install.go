@@ -227,6 +227,7 @@ func handOver(self, installed string) error {
 		}
 	}
 	if trayRunning() {
+		showRunningTray()
 		return nil
 	}
 	return startTray(installed, next...)

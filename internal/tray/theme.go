@@ -36,8 +36,15 @@ const (
 
 const dwmwaUseImmersiveDarkMode = 20
 
+// testTheme makes darkMode report dark (1) or light (2) in tests; 0
+// follows the system.
+var testTheme int
+
 // darkMode reports whether apps use dark mode.
 func darkMode() bool {
+	if testTheme != 0 {
+		return testTheme == 1
+	}
 	k, err := registry.OpenKey(registry.CURRENT_USER, personalizeKey, registry.QUERY_VALUE)
 	if err != nil {
 		return false

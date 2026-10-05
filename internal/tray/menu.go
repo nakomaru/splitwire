@@ -18,8 +18,6 @@ type tunnelMenu struct {
 	status, apply *systray.MenuItem
 	// In the VPN and Proxies submenus.
 	vpn, proxy *systray.MenuItem
-	// In its Configure submenu.
-	problem, port, copy *systray.MenuItem
 }
 
 func (a *app) onClick(item *systray.MenuItem, gen chan struct{}, f func()) {
@@ -61,11 +59,11 @@ func (a *app) rebuild() {
 	}
 	systray.AddSeparator()
 
+	a.onClick(systray.AddMenuItem("Open splitwire", "Tunnels, their apps and settings"), gen, a.openWindow)
 	a.vpnMI = systray.AddMenuItem("VPN", "One tunnel routes apps by its Mode")
 	a.vpnOffMI = a.vpnMI.AddSubMenuItemCheckbox("Off", "", true)
 	a.onClick(a.vpnOffMI, gen, a.vpnOff)
 	a.proxiesMI = systray.AddMenuItem("Proxies", "Any number of tunnels serve local SOCKS5 and HTTP proxies")
-	configMI := systray.AddMenuItem("Configure", "")
 	if len(a.names) == 0 {
 		a.vpnMI.AddSubMenuItem("No tunnels yet", "").Disable()
 		a.proxiesMI.AddSubMenuItem("No tunnels yet", "").Disable()
@@ -77,20 +75,7 @@ func (a *app) rebuild() {
 		a.onClick(m.vpn, gen, func() { a.toggleVPN(name) })
 		m.proxy = a.proxiesMI.AddSubMenuItemCheckbox(name, "", false)
 		a.onClick(m.proxy, gen, func() { a.toggleProxy(name) })
-
-		cm := configMI.AddSubMenuItem(name, "")
-		m.problem = cm.AddSubMenuItem("", "")
-		m.problem.Disable()
-		a.onClick(cm.AddSubMenuItem("Edit configuration", "Open the file in Notepad"), gen, func() { a.edit(name) })
-		m.port = cm.AddSubMenuItem("Change proxy port...", "")
-		a.onClick(m.port, gen, func() { a.changePort(name) })
-		m.copy = cm.AddSubMenuItem("Copy proxy address", "")
-		a.onClick(m.copy, gen, func() { a.copyAddress(name) })
 	}
-	configMI.AddSeparator()
-	a.onClick(configMI.AddSubMenuItem("Open configuration folder", ""), gen, a.openFolder)
-	a.onClick(configMI.AddSubMenuItem("Import from WireGuard app...", "Copy tunnels from the WireGuard app (asks for administrator rights)"), gen, a.importTunnels)
-	a.onClick(configMI.AddSubMenuItem("Create WARP tunnel...", "Register a free Cloudflare WARP device as a new tunnel"), gen, a.createWARP)
 	systray.AddSeparator()
 
 	a.downAllMI = systray.AddMenuItem("Disconnect all", "")
@@ -196,8 +181,10 @@ func show(item *systray.MenuItem, on bool) {
 	}
 }
 
-// refreshLocked updates icon, tooltip and items from the current state.
+// refreshLocked updates icon, tooltip, items and the window from the
+// current state.
 func (a *app) refreshLocked() {
+	a.notifyWindow()
 	if a.summaryMI == nil {
 		return
 	}
@@ -330,21 +317,4 @@ func (a *app) refreshTunnel(name string, m *tunnelMenu, t *ipc.Tunnel, f tunnelF
 	enable(m.vpn, usable || (running && t.As == ipc.AsVPN))
 	enable(m.proxy, usable || (running && t.As == ipc.AsProxy))
 
-	// Configure submenu.
-	if f.error != "" {
-		m.problem.SetTitle("Problem: " + truncate(f.error, 80))
-		m.problem.Show()
-	} else {
-		m.problem.Hide()
-	}
-	if f.cfg != nil && f.cfg.Proxy.IsValid() {
-		m.port.SetTitle(fmt.Sprintf("Change proxy port (%d)...", f.cfg.Proxy.Port()))
-		m.copy.SetTitle("Copy proxy address " + f.cfg.Proxy.String())
-		m.copy.Enable()
-	} else {
-		m.port.SetTitle("Set proxy port...")
-		m.copy.SetTitle("Copy proxy address")
-		m.copy.Disable()
-	}
-	enable(m.port, f.error == "")
 }

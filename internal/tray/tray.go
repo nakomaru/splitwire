@@ -29,8 +29,9 @@ const Command = "tray"
 const (
 	instanceMutex = `Local\splitwire-tray`
 	// quitEvent asks the running tray app to exit, so a new copy can
-	// replace it.
+	// replace it, and openEvent asks it to show its window.
 	quitEvent = `Local\splitwire-tray-quit`
+	openEvent = `Local\splitwire-tray-open`
 	runKey    = `Software\Microsoft\Windows\CurrentVersion\Run`
 	runValue  = "splitwire"
 )
@@ -39,10 +40,19 @@ const (
 // process ID to wait for before deleting it.
 const deleteFlag = "--delete-setup"
 
-// Run starts the tray app. A copy run from outside the install root hands
-// over to the installed copy, updating it first when the two differ.
+// backgroundFlag starts the app without its window, as at sign-in.
+const backgroundFlag = "--background"
+
+// Run starts the tray app and opens its window, unless args start it in
+// the background. A copy run from outside the install root hands over to
+// the installed copy, updating it first when the two differ. A copy run
+// while the app runs has the running app show its window.
 func Run(args []string) error {
 	followSystemTheme()
+	background := len(args) > 0 && args[0] == backgroundFlag
+	if background {
+		args = args[1:]
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -71,14 +81,29 @@ func Run(args []string) error {
 	}
 	if !owned {
 		windows.CloseHandle(mutex)
+		if !background {
+			showRunningTray()
+		}
 		return nil
 	}
 	a := newApp()
-	if quit, err := createQuitEvent(); err == nil {
+	a.openAtStart = !background
+	if quit, err := createEvent(quitEvent); err == nil {
 		defer windows.CloseHandle(quit)
 		go func() {
 			windows.WaitForSingleObject(quit, windows.INFINITE)
 			systray.Quit()
+		}()
+	}
+	if open, err := createEvent(openEvent); err == nil {
+		defer windows.CloseHandle(open)
+		go func() {
+			for {
+				if r, _ := windows.WaitForSingleObject(open, windows.INFINITE); r != windows.WAIT_OBJECT_0 {
+					return
+				}
+				a.openWindow()
+			}
 		}()
 	}
 	systray.Run(a.ready, func() {})
@@ -141,9 +166,18 @@ func takeMutex() (windows.Handle, bool, error) {
 	return h, true, nil
 }
 
-func createQuitEvent() (windows.Handle, error) {
-	name, _ := windows.UTF16PtrFromString(quitEvent)
+// createEvent opens the named auto-reset event, creating it if needed.
+func createEvent(event string) (windows.Handle, error) {
+	name, _ := windows.UTF16PtrFromString(event)
 	return windows.CreateEvent(nil, 0, 0, name)
+}
+
+// showRunningTray asks the running tray app to show its window.
+func showRunningTray() {
+	if ev, err := createEvent(openEvent); err == nil {
+		windows.SetEvent(ev)
+		windows.CloseHandle(ev)
+	}
 }
 
 // mutexModifyState is the MUTEX_MODIFY_STATE access right.
@@ -157,7 +191,7 @@ func quitRunningTray() error {
 		return nil // none running
 	}
 	defer windows.CloseHandle(m)
-	ev, err := createQuitEvent()
+	ev, err := createEvent(quitEvent)
 	if err != nil {
 		return err
 	}
@@ -257,7 +291,7 @@ func setRunAtLogin(on bool) error {
 			exe = installed
 		}
 	}
-	return k.SetStringValue(runValue, windows.EscapeArg(exe)+" "+Command)
+	return k.SetStringValue(runValue, windows.EscapeArg(exe)+" "+Command+" "+backgroundFlag)
 }
 
 // RemoveRunAtLogin deletes the sign-in entry.

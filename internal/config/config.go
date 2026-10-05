@@ -97,6 +97,9 @@ type Config struct {
 	WG *conf.Config
 
 	Mode Mode
+	// ModeSet reports that the text sets Mode. A Mode = full setting keeps
+	// App entries for a later switch to include or exclude.
+	ModeSet bool
 	// Apps are App entries as written: absolute paths, optionally with
 	// %VARIABLE% references and glob patterns.
 	Apps []string
@@ -191,6 +194,7 @@ func parseBool(v string) (bool, error) {
 func (c *Config) set(key, val string) error {
 	switch key {
 	case "mode":
+		c.ModeSet = true
 		switch strings.ToLower(val) {
 		case "full":
 			c.Mode = ModeFull
@@ -253,7 +257,7 @@ func (c *Config) validate() error {
 	if c.Mode != ModeFull && len(c.Apps) == 0 {
 		return fmt.Errorf("Mode = %s needs at least one App", c.Mode)
 	}
-	if c.Mode == ModeFull && len(c.Apps) > 0 {
+	if c.Mode == ModeFull && len(c.Apps) > 0 && !c.ModeSet {
 		return fmt.Errorf("App entries need Mode = include or Mode = exclude")
 	}
 	if c.Mode == ModeInclude && c.WG.Interface.TableOff {
@@ -337,25 +341,12 @@ func expandEnv(s string) (string, error) {
 func (c *Config) ExpandApps() (paths []string, warnings []string, err error) {
 	seen := make(map[string]bool)
 	for _, a := range c.Apps {
-		p, err := expandEnv(a)
+		matches, err := ExpandApp(a)
 		if err != nil {
-			return nil, nil, fmt.Errorf("App %s: %w", a, err)
+			return nil, nil, err
 		}
-		if strings.Contains(p, "%") {
-			return nil, nil, fmt.Errorf("App %s: undefined variable in %s", a, p)
-		}
-		if !filepath.IsAbs(p) {
-			return nil, nil, fmt.Errorf("App %s: path must be absolute", a)
-		}
-		matches := []string{filepath.Clean(p)}
-		if strings.ContainsAny(p, "*?[") {
-			matches, err = filepath.Glob(p)
-			if err != nil {
-				return nil, nil, fmt.Errorf("App %s: %w", a, err)
-			}
-			if len(matches) == 0 {
-				warnings = append(warnings, fmt.Sprintf("App %s matches no files", a))
-			}
+		if len(matches) == 0 {
+			warnings = append(warnings, fmt.Sprintf("App %s matches no files", a))
 		}
 		for _, m := range matches {
 			if k := strings.ToLower(m); !seen[k] {
@@ -367,12 +358,38 @@ func (c *Config) ExpandApps() (paths []string, warnings []string, err error) {
 	return paths, warnings, nil
 }
 
+// ExpandApp expands one App entry to the paths it names: itself with
+// environment variables expanded, or the files its glob matches.
+func ExpandApp(a string) ([]string, error) {
+	p, err := expandEnv(a)
+	if err != nil {
+		return nil, fmt.Errorf("App %s: %w", a, err)
+	}
+	if strings.Contains(p, "%") {
+		return nil, fmt.Errorf("App %s: undefined variable in %s", a, p)
+	}
+	if !filepath.IsAbs(p) {
+		return nil, fmt.Errorf("App %s: path must be absolute", a)
+	}
+	if !strings.ContainsAny(p, "*?[") {
+		return []string{filepath.Clean(p)}, nil
+	}
+	matches, err := filepath.Glob(p)
+	if err != nil {
+		return nil, fmt.Errorf("App %s: %w", a, err)
+	}
+	return matches, nil
+}
+
 // WithExpandedApps returns the configuration text with each App entry
 // replaced by its expanded paths, for running as another user.
 func (c *Config) WithExpandedApps() (string, error) {
-	paths, _, err := c.ExpandApps()
-	if err != nil {
-		return "", err
+	var paths []string
+	if c.Mode != ModeFull {
+		var err error
+		if paths, _, err = c.ExpandApps(); err != nil {
+			return "", err
+		}
 	}
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(c.wgText, "\r\n \t"))

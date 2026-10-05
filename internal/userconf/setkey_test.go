@@ -19,7 +19,7 @@ func TestSetKey(t *testing.T) {
 		},
 		{
 			"[Interface]\n\n[splitwire]  # options\nMode = full\n",
-			"[Interface]\n\n[splitwire]  # options\nProxy = 1080\nMode = full\n",
+			"[Interface]\n\n[splitwire]  # options\nMode = full\nProxy = 1080\n",
 		},
 		{
 			"[Interface]\n\n[Splitwire]\nMode = full\n\n[Splitwire]\n  proxy = 2000 # old\n",
