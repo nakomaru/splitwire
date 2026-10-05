@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -96,9 +97,17 @@ func TestWindowShots(t *testing.T) {
 		testTheme = theme.mode
 		w := newWindow(a)
 		offscreen(w.f.hwnd)
-		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-apps.png"))
-		w.showTab(tabOptions)
-		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-options.png"))
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-vpn.png"))
+		w.showTab(tabProxy)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-proxy.png"))
+		w.showTab(tabDetails)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-details.png"))
+		w.showTab(tabText)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-text.png"))
+		w.f.setText(w.editor, strings.Replace(windowText(w.editor.hwnd), "[Interface]", "[Interface]\r\nMTU = nope", 1))
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-text-error.png"))
+		w.load()
+		w.showTab(tabVPN)
 		// Switching Office off and on again, captured as painted.
 		starting := office
 		starting.State, starting.Peers = ipc.StateStarting, nil
@@ -107,13 +116,13 @@ func TestWindowShots(t *testing.T) {
 			w.refresh()
 			capture(t, w.f.hwnd, filepath.Join(out, fmt.Sprintf("%s-switch-%d.png", theme.name, i)))
 		}
-		w.showTab(tabText)
-		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-text.png"))
-		w.pick(1) // WARP, a proxy
-		w.showTab(tabApps)
-		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-proxy.png"))
+		w.pick(1) // WARP, a proxy in full mode
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-warp-vpn.png"))
+		w.showTab(tabProxy)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-warp-proxy.png"))
 		w.pick(2) // broken
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-broken.png"))
+		a.status = ipc.Status{Tunnels: []ipc.Tunnel{office, warpT}}
 		p := newPicker(w.f.hwnd, "Office", a.files["Office"].cfg.Apps)
 		offscreen(p.f.hwnd)
 		shot(t, p.f.hwnd, filepath.Join(out, theme.name+"-picker.png"))

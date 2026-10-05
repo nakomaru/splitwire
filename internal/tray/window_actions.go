@@ -79,7 +79,7 @@ func (w *window) setMode(m config.Mode) {
 	if m != config.ModeFull && len(list) == 0 {
 		added := w.pickApps()
 		if len(added) == 0 {
-			// The radio buttons go back to the file's mode.
+			// The split buttons show the file's mode again.
 			w.update()
 			return
 		}
@@ -161,20 +161,25 @@ func (w *window) applyPort() {
 	w.update()
 }
 
-// checkText parses the editor's text and shows the result.
+// checkText parses the editor's text, colors it and shows the result.
 func (w *window) checkText() {
 	text := normalize(windowText(w.editor.hwnd))
 	w.dirty = w.sel != "" && text != w.text
 	_, err := config.Parse(text, w.sel)
 	f := w.f
+	w.errLine = 0
+	msg := ""
+	if err != nil {
+		w.errLine, msg = errorLine(text, err)
+	}
+	w.colorText(text)
 	switch {
 	case w.sel == "":
 		f.setText(w.parse, "")
 	case err != nil:
 		w.parse.color = labelError
-		msg := err.Error()
-		if line := errorLine(text, err); line > 0 {
-			msg = fmt.Sprintf("Line %d: %s", line, msg)
+		if w.errLine > 0 {
+			msg = fmt.Sprintf("Line %d: %s", w.errLine, msg)
 		}
 		f.setText(w.parse, msg)
 	case w.dirty:
@@ -189,26 +194,59 @@ func (w *window) checkText() {
 	f.enable(w.revert, w.dirty)
 }
 
-// offender matches the quoted text that WireGuard's parse errors end with.
-var offender = regexp.MustCompile(`: ("(?:[^"\\]|\\.)*")$`)
+// highlight colors the editor's text again, after the colors change.
+func (w *window) highlight() {
+	w.colorText(normalize(windowText(w.editor.hwnd)))
+}
 
-// errorLine finds the line of a WireGuard parse error by the text it
-// quotes, or 0.
-func errorLine(text string, err error) int {
-	m := offender.FindStringSubmatch(err.Error())
-	if m == nil {
-		return 0
+// colorText colors the editor, which holds text, by its syntax.
+func (w *window) colorText(text string) {
+	w.coloring = true
+	defer func() { w.coloring = false }()
+	base, styles := syntaxStyles(w.f.col)
+	w.f.colorize(w.editor, base, confSpans(text, w.errLine), styles)
+}
+
+var (
+	// quoted matches the quoted text that parse errors name.
+	quoted = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
+	// numbered matches the line number that [SplitWire] errors start with.
+	numbered = regexp.MustCompile(`^line (\d+): `)
+	// number matches the errors of numbers that WireGuard passes on.
+	number = regexp.MustCompile(`^strconv\.\w+: parsing ("(?:[^"\\]|\\.)*"): (.*)$`)
+)
+
+// errorLine finds the line of a parse error, or 0, and the error's message
+// without a line number.
+func errorLine(text string, err error) (int, string) {
+	msg := err.Error()
+	if m := numbered.FindStringSubmatch(msg); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n, msg[len(m[0]):]
 	}
-	what, uerr := strconv.Unquote(m[1])
+	if m := number.FindStringSubmatch(msg); m != nil {
+		why := "is not a number"
+		if strings.Contains(m[2], "range") {
+			why = "is out of range"
+		}
+		msg = m[1] + " " + why
+	}
+	// The line whose value is the last quoted text, which names the
+	// offending value.
+	all := quoted.FindAllString(msg, -1)
+	if len(all) == 0 {
+		return 0, msg
+	}
+	what, uerr := strconv.Unquote(all[len(all)-1])
 	if uerr != nil || what == "" {
-		return 0
+		return 0, msg
 	}
 	for i, line := range strings.Split(text, "\n") {
-		if strings.Contains(line, what) {
-			return i + 1
+		if code, _, _ := strings.Cut(line, "#"); strings.Contains(code, what) {
+			return i + 1, msg
 		}
 	}
-	return 0
+	return 0, msg
 }
 
 // saveText writes the editor's text to the file, and reports success.
@@ -252,7 +290,7 @@ func (w *window) addMenu() {
 				messageBox(f.hwnd, "Could not import "+path+":\n\n"+err.Error(), windows.MB_ICONERROR)
 				return
 			}
-			w.selectNew(name, tabApps)
+			w.selectNew(name, tabVPN)
 		}},
 		{text: "Import from the WireGuard app...", run: func() { go w.a.importTunnels() }},
 		{text: "Create a WARP tunnel...", run: w.createWARP},

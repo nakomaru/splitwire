@@ -59,7 +59,7 @@ func TestEditExample(t *testing.T) {
 	if c.Mode != ModeInclude || len(c.Apps) != 1 || c.Proxy.Port() != 1081 {
 		t.Fatalf("parsed %+v", c)
 	}
-	want := "[SplitWire]\nMode = include\nApp = C:\\Windows\\System32\\curl.exe\nProxy = 1081\n# Settings for splitwire"
+	want := "[SplitWire]\nMode = include\nApp = C:\\Windows\\System32\\curl.exe\nProxy = 1081\n# Settings for SplitWire"
 	if !strings.Contains(text, want) {
 		t.Fatalf("settings not at the top of the section:\n%s", text)
 	}

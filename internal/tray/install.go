@@ -114,7 +114,7 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 			checked: !updating || runAtLogin(),
 		}, key: "signIn"},
 		choice{option: option{
-			label:   "Reconnect tunnels at boot",
+			label:   "Reconnect tunnels when Windows starts",
 			detail:  "Brings back running tunnels before anyone signs in.",
 			checked: updating && bootOn(),
 		}, on: "--boot", off: "--no-boot"},

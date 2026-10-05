@@ -676,7 +676,7 @@ func status(name string) error {
 			st := rep.Status
 			boot := ""
 			if st.Boot {
-				boot = "; running tunnels come back at boot"
+				boot = "; running tunnels come back when Windows starts"
 			}
 			fmt.Printf("Manager: %d tunnels%s\n", len(st.Tunnels), boot)
 			for _, t := range st.Tunnels {

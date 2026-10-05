@@ -335,7 +335,7 @@ func (a *app) toggleBoot() {
 	on := !a.status.Boot
 	a.mu.Unlock()
 	if _, err := call(ipc.Request{Op: ipc.OpBoot, Boot: on}); err != nil {
-		errorBox("Could not change boot start:\n\n%v", err)
+		errorBox("Could not change reconnecting when Windows starts:\n\n%v", err)
 	}
 }
 

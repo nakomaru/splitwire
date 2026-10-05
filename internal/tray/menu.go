@@ -80,7 +80,7 @@ func (a *app) rebuild() {
 
 	a.downAllMI = systray.AddMenuItem("Disconnect all", "")
 	a.onClick(a.downAllMI, gen, func() { a.stop("") })
-	a.bootMI = systray.AddMenuItemCheckbox("Reconnect tunnels at boot", "Bring the running tunnels back up when Windows starts, before sign-in", false)
+	a.bootMI = systray.AddMenuItemCheckbox("Reconnect tunnels when Windows starts", "Brings back running tunnels before anyone signs in", false)
 	a.onClick(a.bootMI, gen, a.toggleBoot)
 	a.loginMI = systray.AddMenuItemCheckbox("Start SplitWire at sign-in", "", runAtLogin())
 	a.onClick(a.loginMI, gen, a.toggleLogin)

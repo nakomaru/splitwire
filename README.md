@@ -31,7 +31,7 @@ splitwire import           # copy tunnels from the WireGuard app
 splitwire check home       # validate and show routes, DNS and apps
 splitwire up home          # run until Ctrl+C
 splitwire proxy warp       # or run it as a proxy until Ctrl+C (no admin needed)
-splitwire install home     # or run as a service that starts at boot
+splitwire install home     # or run as a service that starts with Windows
 ```
 
 Configurations live in `%APPDATA%\splitwire\<name>.conf`; commands take the
@@ -69,22 +69,27 @@ For the selected tunnel:
   shows the connection, and while it runs a graph shows the received and
   sent rates of the last three minutes with the totals. A tunnel edited
   since it connected offers **Reconnect**.
-- **Apps** sets split tunneling for when the tunnel runs as the VPN: Off
-  (every app, routed by `AllowedIPs`), Include (only the listed apps) or
-  Exclude (every app but the listed ones). **Add apps** offers the programs running now, the ones
-  Explorer recorded as recently started (when Windows tracks app launches)
-  and the Start menu's, with a search box that also takes a typed path or
-  pattern, and **Browse...**. Folders named for a version become `*`, so
-  `...\Discord\app-1.0.9163\Discord.exe` is added as
-  `...\Discord\app-*\Discord.exe` and keeps working after updates. Each
-  entry shows its icon and name, and warns when it matches no file. With
-  split tunneling off, the list stays in the file for Include and Exclude.
-- **Options** sets the kill switch, the local network exception, strict
-  DNS, the proxy port (refusing ports another tunnel or program holds) and
-  routing the proxy through the VPN, and shows the public key, addresses
-  and endpoint, with buttons to copy the key and the proxy address.
-- **Text** edits the whole file, checking it on every keystroke and naming
-  the line of a problem; **Save** (Ctrl+S) is ready once it checks out.
+- **VPN** holds the settings for running as the VPN. **Split tunneling**
+  is Off (every app, routed by `AllowedIPs`), Include (only the listed
+  apps) or Exclude (every app but the listed ones). **Add apps** offers the
+  programs running now, the ones Explorer recorded as recently started
+  (when Windows tracks app launches) and the Start menu's, with a search
+  box that also takes a typed path or pattern, and **Browse...**. Folders
+  named for a version become `*`, so `...\Discord\app-1.0.9163\Discord.exe`
+  is added as `...\Discord\app-*\Discord.exe` and keeps working after
+  updates. Each entry shows its icon and name, and warns when it matches no
+  file. With split tunneling off, the list stays in the file for Include
+  and Exclude. Below the list are the kill switch with its local network
+  exception, shown for Off and Exclude, and strict DNS, shown when the
+  tunnel sets `DNS`; their tooltips say what they do.
+- **Proxy** holds the settings for running as a proxy: the port (refusing
+  ports another tunnel or program holds), a button to copy the address,
+  and **Chain through the VPN** (`ProxyVia = vpn`).
+- **Details** shows the public key, with a button to copy it, the
+  addresses, the DNS servers, and the first peer's endpoint and allowed IPs.
+- **Text** edits the whole file with its sections, keys, values and
+  comments in colors, checking it on every keystroke and underlining the
+  line of a problem; **Save** (Ctrl+S) is ready once it checks out.
 
 The window writes each change straight to the file, keeping its comments,
 so the file stays the one source of truth and other editors can open it
@@ -105,7 +110,7 @@ Open SplitWire
 VPN: Office   >  Off / Office - include, 2 apps / WARP - ... (proxy now)
 Proxies         >  WARP - 127.0.0.1:1080 / backup - port picked from 1080 on first use
 Disconnect all
-Reconnect tunnels at boot
+Reconnect tunnels when Windows starts
 Start SplitWire at sign-in
 Show manager log, Uninstall SplitWire..., Quit
 ```
@@ -134,7 +139,7 @@ split tunnel driver, and the window says so.
 - **Add SplitWire to the Start menu**: your own Start menu; each user who
   runs setup gets their own.
 - **Start SplitWire at sign-in**.
-- **Reconnect tunnels at boot**: the menu changes it later too.
+- **Reconnect tunnels when Windows starts**: the menu changes it later too.
 - **Import tunnels from the WireGuard app**, when that app is installed (on
   while `%APPDATA%\splitwire` holds no tunnels).
 - **Delete this file afterward**, when run from outside Program Files: the
@@ -224,7 +229,7 @@ tunnel, and stop while no VPN runs.
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
-| `manager install [options]` | Install or update the manager service the app uses, adding the current user, or `--user=SID`, to its users. `--boot`/`--no-boot` sets reconnecting at boot, `--wireguard-driver` and `--split-tunnel-driver` install those drivers now, `--import` imports from the WireGuard app (`manager leave [--user=SID]` removes a user again, `manager uninstall` removes the service) |
+| `manager install [options]` | Install or update the manager service the app uses, adding the current user, or `--user=SID`, to its users. `--boot`/`--no-boot` sets reconnecting when Windows starts, `--wireguard-driver` and `--split-tunnel-driver` install those drivers now, `--import` imports from the WireGuard app (`manager leave [--user=SID]` removes a user again, `manager uninstall` removes the service) |
 | `bootstrap` | Install wireguard.dll, the WireGuardNT driver and the split tunnel driver without bringing a tunnel up |
 | `cleanup [--configs] [--keep-wireguardnt]` | Uninstall everything (see below); `--configs` also deletes `%APPDATA%\splitwire`, `--keep-wireguardnt` keeps the WireGuardNT driver |
 

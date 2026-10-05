@@ -4,7 +4,7 @@ package config
 // examples, appended to tunnels splitwire creates or imports. Without
 // uncommented settings the tunnel runs with the defaults.
 const ExampleSection = `[SplitWire]
-# Settings for splitwire; the WireGuard app ignores this section. Remove a
+# Settings for SplitWire; the WireGuard app ignores this section. Remove a
 # leading # to use a line.
 
 # As a VPN, Mode picks the apps that use the tunnel:

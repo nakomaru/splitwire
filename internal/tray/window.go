@@ -22,9 +22,11 @@ const wmRefresh = wmApp + 1
 
 // Tabs of a tunnel.
 const (
-	tabApps = iota
-	tabOptions
+	tabVPN = iota
+	tabProxy
+	tabDetails
 	tabText
+	tabCount
 )
 
 // appEntry is an App setting as the window shows it.
@@ -63,7 +65,8 @@ func (a *app) snapshot() snapshot {
 }
 
 // window is the tunnels window: the list of tunnels, and the selected
-// one's state, apps, options and text.
+// one's state, its settings as a VPN and as a proxy, its details and its
+// text.
 type window struct {
 	f     *form
 	a     *app
@@ -81,22 +84,32 @@ type window struct {
 	cfgErr  error
 	entries []appEntry
 	// dirty reports that the editor holds unsaved changes; loading
-	// suppresses change handling while the window fills the editor.
-	dirty, loading bool
-	graph          rect
+	// suppresses change handling while the window fills the editor, and
+	// coloring while it colors the text.
+	dirty, loading, coloring bool
+	// errLine is the editor's line with a problem, from 1, or 0.
+	errLine int
+	graph   rect
+	// killShown and dnsShown report that the tunnel's mode and DNS give
+	// those settings an effect.
+	killShown, dnsShown bool
 
-	list, add, del                                      *control
-	title, rename, status, banner, reconnect            *control
-	segOff, segVPN, segProxy                            *control
-	tabs                                                [3]*control
-	problem, hApps, appsNote                            *control
-	modeFull, modeInclude, modeExclude                  *control
-	appList, appAdd, appRemove, appHint                 *control
-	hVPN, kill, lan, dns, hProxy, portLabel, port       *control
-	portNote, copyAddr, via, hIface                     *control
-	pubLabel, pub, copyPub, addrLabel, addrs, peerLabel *control
-	peer                                                *control
-	editor, parse, revert, save                         *control
+	list, add, del                           *control
+	title, rename, status, banner, reconnect *control
+	segOff, segVPN, segProxy                 *control
+	tabs                                     [tabCount]*control
+	problem                                  *control
+
+	hSplit, splitOff, splitInclude, splitExclude  *control
+	modeNote, appList, appAdd, appRemove, appHint *control
+	kill, lan, dns                                *control
+
+	portLabel, port, portNote, copyAddr, proxyHint, via, viaNote *control
+
+	hIface, pubLabel, pub, copyPub, addrLabel, addrs, dnsLabel, dnsList *control
+	hPeer, endLabel, endpoint, allowLabel, allowed                      *control
+
+	editor, parse, revert, save *control
 }
 
 // windowCreating marks a.win while the window thread starts.
@@ -179,6 +192,11 @@ func newWindow(a *app) *window {
 		}
 		return 0, false
 	}
+	f.restyle = func() {
+		if w.editor != nil {
+			w.highlight()
+		}
+	}
 	newForm(f, "SplitWire", 0, wsOverlappedWindow, 920, 700)
 
 	w.list = f.addList(&control{itemHeight: 52, empty: "No tunnels yet. Add one below."}, 0)
@@ -194,43 +212,57 @@ func newWindow(a *app) *window {
 	w.segOff = f.add(&control{kind: kindButton, text: "Off"})
 	w.segVPN = f.add(&control{kind: kindButton, text: "VPN"})
 	w.segProxy = f.add(&control{kind: kindButton, text: "Proxy"})
-	for i, name := range []string{"Apps", "Options", "Text"} {
+	for i, name := range []string{"VPN", "Proxy", "Details", "Text"} {
 		w.tabs[i] = f.add(&control{kind: kindTab, text: name})
 	}
 	w.problem = f.add(&control{kind: kindLabel, color: labelError, wrap: true})
 
-	w.hApps = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Split tunneling"})
-	w.appsNote = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Applies when it runs as the VPN. As a proxy, it carries any app set to use it."})
-	w.modeFull = f.add(&control{kind: kindRadio, text: "Off: every app, routed by AllowedIPs"})
-	w.modeInclude = f.add(&control{kind: kindRadio, text: "Include: only the apps below"})
-	w.modeExclude = f.add(&control{kind: kindRadio, text: "Exclude: every app except the apps below"})
-	w.appList = f.addList(&control{itemHeight: 46, empty: "No apps yet. Add the apps this tunnel should cover."}, lbsExtendedSel)
+	w.hSplit = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Split tunneling"})
+	w.splitOff = f.add(&control{kind: kindButton, text: "Off"})
+	w.splitInclude = f.add(&control{kind: kindButton, text: "Include"})
+	w.splitExclude = f.add(&control{kind: kindButton, text: "Exclude"})
+	w.modeNote = f.add(&control{kind: kindLabel, color: labelSubtle})
+	w.appList = f.addList(&control{itemHeight: 46}, lbsExtendedSel)
 	w.appList.drawItem = w.drawApp
 	w.appAdd = f.add(&control{kind: kindButton, text: "Add apps", glyph: glyphAdd})
 	w.appRemove = f.add(&control{kind: kindButton, text: "Remove", glyph: glyphDelete})
 	w.appHint = f.add(&control{kind: kindLabel, color: labelSubtle})
-
-	w.hVPN = f.add(&control{kind: kindLabel, font: fontSemibold, text: "As a VPN"})
-	w.kill = f.add(&control{kind: kindCheck, text: "Kill switch: block traffic that bypasses the tunnel"})
-	w.lan = f.add(&control{kind: kindCheck, text: "Allow the local network past the kill switch"})
+	w.kill = f.add(&control{kind: kindCheck, text: "Kill switch"})
+	w.lan = f.add(&control{kind: kindCheck, text: "Allow the local network"})
 	w.dns = f.add(&control{kind: kindCheck, text: "Use only the tunnel's DNS servers"})
-	w.hProxy = f.add(&control{kind: kindLabel, font: fontSemibold, text: "As a proxy"})
+	f.setTip(w.kill, "Blocks traffic outside the tunnel while it runs, so nothing leaks if the tunnel drops. "+
+		"Excluded apps stay allowed. With AllowedIPs covering every address, it starts out on.")
+	f.setTip(w.lan, "Lets apps reach private addresses, such as the router, printers and other computers at "+
+		"home, past the kill switch.")
+	f.setTip(w.dns, "Blocks DNS servers other than the tunnel's, so name lookups stay inside the tunnel.")
+
 	w.portLabel = f.add(&control{kind: kindLabel, text: "Port"})
 	w.port = f.addEdit(&control{}, esNumber)
 	w.portNote = f.add(&control{kind: kindLabel, color: labelSubtle})
 	w.copyAddr = f.add(&control{kind: kindButton, text: "Copy address", glyph: glyphCopy})
-	w.via = f.add(&control{kind: kindCheck, text: "Send the proxy's traffic only through the VPN"})
+	w.proxyHint = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true,
+		text: "Apps use the tunnel through their SOCKS5 or HTTP proxy setting, pointed at this address."})
+	w.via = f.add(&control{kind: kindCheck, text: "Chain through the VPN"})
+	w.viaNote = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true,
+		text: "Sends the proxy's encrypted traffic through the tunnel running as the VPN, so this tunnel's " +
+			"server sees the VPN's address. While no VPN runs, the proxy waits."})
+
 	w.hIface = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Interface"})
 	w.pubLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Public key"})
 	w.pub = f.add(&control{kind: kindLabel})
 	w.copyPub = f.add(&control{kind: kindIcon, glyph: glyphCopy})
+	f.setTip(w.copyPub, "Copy the public key")
 	w.addrLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Addresses"})
 	w.addrs = f.add(&control{kind: kindLabel})
-	w.peerLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Endpoint"})
-	w.peer = f.add(&control{kind: kindLabel})
+	w.dnsLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "DNS servers"})
+	w.dnsList = f.add(&control{kind: kindLabel})
+	w.hPeer = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Peer"})
+	w.endLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Endpoint"})
+	w.endpoint = f.add(&control{kind: kindLabel})
+	w.allowLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Allowed IPs"})
+	w.allowed = f.add(&control{kind: kindLabel})
 
-	w.editor = f.addEdit(&control{font: fontMono, wrap: true}, esMultiline|esAutoVScroll|wsVScroll|wsHScroll|esWantReturn|esNoHideSel)
-	procSendMessageW.Call(w.editor.hwnd, emLimitText, 1<<20, 0)
+	w.editor = f.addRich(&control{font: fontMono}, esMultiline|esAutoVScroll|wsVScroll|wsHScroll|esWantReturn|esNoHideSel)
 	w.parse = f.add(&control{kind: kindLabel})
 	w.revert = f.add(&control{kind: kindButton, text: "Revert"})
 	w.save = f.add(&control{kind: kindButton, text: "Save", primary: true})
@@ -240,7 +272,7 @@ func newWindow(a *app) *window {
 
 	f.ready = true
 	w.refresh()
-	w.showTab(tabApps)
+	w.showTab(tabVPN)
 	w.relayout()
 	return w
 }
@@ -311,61 +343,9 @@ func (w *window) layout(cw, ch int32) {
 
 	f.place(w.problem, rect{x0, y, x1, y + f.measureWrapped(w.problem.text, f.fonts[fontNormal], x1-x0)})
 
-	// Apps tab.
-	ay := y
-	f.place(w.hApps, rect{x0, ay, x1, ay + s(22)})
-	ay += s(22)
-	f.place(w.appsNote, rect{x0, ay, x1, ay + s(20)})
-	ay += s(28)
-	for _, c := range []*control{w.modeFull, w.modeInclude, w.modeExclude} {
-		f.place(c, rect{x0, ay, x0 + f.toggleWidth(c), ay + s(28)})
-		ay += s(30)
-	}
-	ay += s(8)
-	f.place(w.appList, rect{x0, ay, x1, by - s(10)})
-	aw := f.buttonWidth(w.appAdd)
-	f.place(w.appAdd, rect{x0, by, x0 + aw, by + bh})
-	rw := f.buttonWidth(w.appRemove)
-	f.place(w.appRemove, rect{x0 + aw + s(8), by, x0 + aw + s(8) + rw, by + bh})
-	f.place(w.appHint, rect{x0 + aw + rw + s(24), by, x1, by + bh})
-
-	// Options tab.
-	oy := y
-	row := func(c *control, h int32) {
-		f.place(c, rect{x0, oy, x1, oy + h})
-		oy += h
-	}
-	row(w.hVPN, s(22))
-	oy += s(4)
-	for _, c := range []*control{w.kill, w.lan, w.dns} {
-		f.place(c, rect{x0, oy, x0 + f.toggleWidth(c), oy + s(28)})
-		oy += s(30)
-	}
-	oy += s(16)
-	row(w.hProxy, s(22))
-	oy += s(8)
-	lblW := s(96)
-	f.place(w.portLabel, rect{x0, oy, x0 + lblW, oy + bh})
-	f.place(w.port, rect{x0 + lblW, oy, x0 + lblW + s(120), oy + bh})
-	cw2 := f.buttonWidth(w.copyAddr)
-	f.place(w.copyAddr, rect{x1 - cw2, oy, x1, oy + bh})
-	f.place(w.portNote, rect{x0 + lblW + s(132), oy, x1 - cw2 - s(12), oy + bh})
-	oy += bh + s(8)
-	f.place(w.via, rect{x0, oy, x0 + f.toggleWidth(w.via), oy + s(28)})
-	oy += s(30) + s(16)
-	row(w.hIface, s(22))
-	oy += s(8)
-	pair := func(label, value *control) {
-		f.place(label, rect{x0, oy, x0 + lblW, oy + s(24)})
-		f.place(value, rect{x0 + lblW, oy, x1 - s(36), oy + s(24)})
-		oy += s(28)
-	}
-	pair(w.pubLabel, w.pub)
-	pw, _ := f.measure(w.pub.text, f.fonts[fontNormal])
-	px := clamp(x0+lblW+pw+s(6), x0+lblW, x1-s(28))
-	f.place(w.copyPub, rect{px, w.pub.r.top, px + s(28), w.pub.r.bottom})
-	pair(w.addrLabel, w.addrs)
-	pair(w.peerLabel, w.peer)
+	w.layoutVPN(x0, x1, y, by+bh)
+	w.layoutProxy(x0, x1, y)
+	w.layoutDetails(x0, x1, y)
 
 	// Text tab.
 	f.place(w.editor, rect{x0, y, x1, by - s(10)})
@@ -374,6 +354,93 @@ func (w *window) layout(cw, ch int32) {
 	f.place(w.save, rect{x1 - sw, by, x1, by + bh})
 	f.place(w.revert, rect{x1 - sw - s(8) - vw, by, x1 - sw - s(8), by + bh})
 	f.place(w.parse, rect{x0, by, x1 - sw - vw - s(24), by + bh})
+}
+
+// layoutVPN places the VPN tab between y and bottom: split tunneling at
+// the top, the apps in the middle, and the protections at the bottom.
+func (w *window) layoutVPN(x0, x1, y, bottom int32) {
+	f := w.f
+	s := f.px
+	bh := s(32)
+	hw, _ := f.measure(w.hSplit.text, f.fonts[fontSemibold])
+	f.place(w.hSplit, rect{x0, y, x0 + hw, y + bh})
+	segs := []*control{w.splitOff, w.splitInclude, w.splitExclude}
+	var segW int32
+	for _, c := range segs {
+		segW = max(segW, f.buttonWidth(c))
+	}
+	sx := x0 + hw + s(20)
+	for i, c := range segs {
+		x := sx + int32(i)*(segW+s(4))
+		f.place(c, rect{x, y, x + segW, y + bh})
+	}
+	y += bh + s(6)
+	f.place(w.modeNote, rect{x0, y, x1, y + s(20)})
+	y += s(20) + s(10)
+
+	if w.dnsShown {
+		f.place(w.dns, rect{x0, bottom - s(28), x0 + f.toggleWidth(w.dns), bottom})
+		bottom -= s(30)
+	}
+	if w.killShown {
+		kw := f.toggleWidth(w.kill)
+		f.place(w.kill, rect{x0, bottom - s(28), x0 + kw, bottom})
+		f.place(w.lan, rect{x0 + kw + s(24), bottom - s(28), x0 + kw + s(24) + f.toggleWidth(w.lan), bottom})
+		bottom -= s(30)
+	}
+	if w.dnsShown || w.killShown {
+		bottom -= s(12)
+	}
+	aw := f.buttonWidth(w.appAdd)
+	rw := f.buttonWidth(w.appRemove)
+	f.place(w.appAdd, rect{x0, bottom - bh, x0 + aw, bottom})
+	f.place(w.appRemove, rect{x0 + aw + s(8), bottom - bh, x0 + aw + s(8) + rw, bottom})
+	f.place(w.appHint, rect{x0 + aw + rw + s(24), bottom - bh, x1, bottom})
+	f.place(w.appList, rect{x0, y, x1, bottom - bh - s(10)})
+}
+
+func (w *window) layoutProxy(x0, x1, y int32) {
+	f := w.f
+	s := f.px
+	bh := s(32)
+	lblW := s(96)
+	f.place(w.portLabel, rect{x0, y, x0 + lblW, y + bh})
+	f.place(w.port, rect{x0 + lblW, y, x0 + lblW + s(120), y + bh})
+	cw := f.buttonWidth(w.copyAddr)
+	f.place(w.copyAddr, rect{x1 - cw, y, x1, y + bh})
+	f.place(w.portNote, rect{x0 + lblW + s(132), y, x1 - cw - s(12), y + bh})
+	y += bh + s(10)
+	h := f.measureWrapped(w.proxyHint.text, f.fonts[fontNormal], x1-x0)
+	f.place(w.proxyHint, rect{x0, y, x1, y + h})
+	y += h + s(24)
+	f.place(w.via, rect{x0, y, x0 + f.toggleWidth(w.via), y + s(28)})
+	y += s(30)
+	nx := x0 + s(30)
+	f.place(w.viaNote, rect{nx, y, x1, y + f.measureWrapped(w.viaNote.text, f.fonts[fontNormal], x1-nx)})
+}
+
+func (w *window) layoutDetails(x0, x1, y int32) {
+	f := w.f
+	s := f.px
+	lblW := s(110)
+	pair := func(label, value *control) {
+		f.place(label, rect{x0, y, x0 + lblW, y + s(24)})
+		f.place(value, rect{x0 + lblW, y, x1 - s(36), y + s(24)})
+		y += s(28)
+	}
+	f.place(w.hIface, rect{x0, y, x1, y + s(22)})
+	y += s(30)
+	pair(w.pubLabel, w.pub)
+	pw, _ := f.measure(w.pub.text, f.fonts[fontNormal])
+	px := clamp(x0+lblW+pw+s(6), x0+lblW, x1-s(28))
+	f.place(w.copyPub, rect{px, w.pub.r.top, px + s(28), w.pub.r.bottom})
+	pair(w.addrLabel, w.addrs)
+	pair(w.dnsLabel, w.dnsList)
+	y += s(16)
+	f.place(w.hPeer, rect{x0, y, x1, y + s(22)})
+	y += s(30)
+	pair(w.endLabel, w.endpoint)
+	pair(w.allowLabel, w.allowed)
 }
 
 // relayout lays the window out again after controls appear or vanish.
@@ -450,8 +517,10 @@ func (w *window) has(name string) bool {
 	return false
 }
 
+// normalize drops a byte order mark and makes every line end with \n.
 func normalize(s string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(s, "\uFEFF"), "\r\n", "\n")
+	s = strings.ReplaceAll(strings.TrimPrefix(s, "\uFEFF"), "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 // load reads the selected tunnel's file into the window.
@@ -576,54 +645,13 @@ func (w *window) update() {
 		layoutChanged = true
 	}
 	if c := w.cfg; c != nil {
-		f.setOn(w.modeFull, c.Mode == config.ModeFull)
-		f.setOn(w.modeInclude, c.Mode == config.ModeInclude)
-		f.setOn(w.modeExclude, c.Mode == config.ModeExclude)
-		hint := "Programs an app starts follow it."
-		w.appList.empty = "No apps yet."
-		if c.Mode == config.ModeFull {
-			w.appList.empty = "Split tunneling is off, so every app uses the VPN. Pick Include or Exclude to choose apps."
-			if len(c.Apps) > 0 {
-				hint = "Kept for Include and Exclude; split tunneling is off."
-			}
-		}
-		f.setText(w.appHint, hint)
-		f.enable(w.appRemove, len(f.listSelected(w.appList)) > 0)
-
-		split := c.Mode != config.ModeInclude && !c.WG.Interface.TableOff
-		f.setOn(w.kill, c.KillSwitchOn())
-		f.enable(w.kill, split)
-		f.setOn(w.lan, c.AllowLAN)
-		f.enable(w.lan, split && c.KillSwitchOn())
-		f.setOn(w.dns, c.StrictDNS)
-		f.enable(w.dns, len(c.WG.Interface.DNS) > 0)
-		f.setOn(w.via, c.ProxyVia == config.ViaVPN)
-		note := "Listens on " + config.ProxyHost.String()
-		if c.Proxy.IsValid() {
-			note = "Listens on " + c.Proxy.String()
-		}
-		f.setText(w.portNote, note)
-		f.enable(w.copyAddr, c.Proxy.IsValid())
-		if pub := c.WG.Interface.PrivateKey.Public().String(); pub != w.pub.text {
-			f.setText(w.pub, pub)
+		if w.updateVPN(c) {
 			layoutChanged = true
 		}
-		var addrs []string
-		for _, a := range c.WG.Interface.Addresses {
-			addrs = append(addrs, a.String())
+		w.updateProxy(c)
+		if w.updateDetails(c) {
+			layoutChanged = true
 		}
-		f.setText(w.addrs, strings.Join(addrs, ", "))
-		peer := "No peer"
-		if len(c.WG.Peers) > 0 {
-			peer = c.WG.Peers[0].Endpoint.String()
-			if c.WG.Peers[0].Endpoint.IsEmpty() {
-				peer = "No endpoint"
-			}
-			if n := len(c.WG.Peers) - 1; n > 0 {
-				peer += " and " + plural(n, "more peer")
-			}
-		}
-		f.setText(w.peer, peer)
 	}
 	w.showTab(w.tab)
 	if layoutChanged {
@@ -631,6 +659,106 @@ func (w *window) update() {
 	} else if !w.graph.empty() {
 		procInvalidateRect.Call(f.hwnd, uintptr(unsafe.Pointer(&w.graph)), 0)
 	}
+}
+
+// updateVPN shows the tunnel's settings as a VPN, and reports whether the
+// layout needs to follow.
+func (w *window) updateVPN(c *config.Config) bool {
+	f := w.f
+	f.setOn(w.splitOff, c.Mode == config.ModeFull)
+	f.setOn(w.splitInclude, c.Mode == config.ModeInclude)
+	f.setOn(w.splitExclude, c.Mode == config.ModeExclude)
+	hint := "Programs an app starts follow it."
+	switch c.Mode {
+	case config.ModeFull:
+		f.setText(w.modeNote, "Every app uses the VPN, for the addresses in AllowedIPs.")
+		w.appList.empty = "Pick Include or Exclude to choose apps."
+		if len(c.Apps) > 0 {
+			hint = "Kept for Include and Exclude."
+		}
+	case config.ModeInclude:
+		f.setText(w.modeNote, "Only the apps below use the VPN. Other apps connect directly.")
+		w.appList.empty = "No apps yet."
+	case config.ModeExclude:
+		f.setText(w.modeNote, "Every app uses the VPN except the apps below, which connect directly.")
+		w.appList.empty = "No apps yet."
+	}
+	f.setText(w.appHint, hint)
+	f.enable(w.appRemove, len(f.listSelected(w.appList)) > 0)
+
+	f.setOn(w.kill, c.KillSwitchOn())
+	f.setOn(w.lan, c.AllowLAN)
+	f.enable(w.lan, c.KillSwitchOn())
+	f.setOn(w.dns, c.StrictDNS)
+	killShown := c.Mode != config.ModeInclude && !c.WG.Interface.TableOff
+	dnsShown := len(c.WG.Interface.DNS) > 0
+	if killShown == w.killShown && dnsShown == w.dnsShown {
+		return false
+	}
+	w.killShown, w.dnsShown = killShown, dnsShown
+	return true
+}
+
+// updateProxy shows the tunnel's settings as a proxy.
+func (w *window) updateProxy(c *config.Config) {
+	f := w.f
+	f.setOn(w.via, c.ProxyVia == config.ViaVPN)
+	note := "Picks a free port from 1080 up"
+	if c.Proxy.IsValid() {
+		note = "Listens on " + c.Proxy.String()
+	}
+	f.setText(w.portNote, note)
+	f.enable(w.copyAddr, c.Proxy.IsValid())
+}
+
+// updateDetails shows the tunnel's interface and first peer, and reports
+// whether the layout needs to follow.
+func (w *window) updateDetails(c *config.Config) bool {
+	f := w.f
+	changed := false
+	if pub := c.WG.Interface.PrivateKey.Public().String(); pub != w.pub.text {
+		f.setText(w.pub, pub)
+		changed = true
+	}
+	value := func(l *control, items []string, none string) {
+		text := strings.Join(items, ", ")
+		if text == "" {
+			text = none
+		}
+		f.setText(l, text)
+		if text != l.tip {
+			f.setTip(l, text)
+		}
+	}
+	var addrs, dns []string
+	for _, a := range c.WG.Interface.Addresses {
+		addrs = append(addrs, a.String())
+	}
+	for _, d := range c.WG.Interface.DNS {
+		dns = append(dns, d.String())
+	}
+	dns = append(dns, c.WG.Interface.DNSSearch...)
+	value(w.addrs, addrs, "None")
+	value(w.dnsList, dns, "None; the system's servers")
+
+	head := "Peer"
+	if n := len(c.WG.Peers); n > 1 {
+		head = fmt.Sprintf("Peer 1 of %d", n)
+	}
+	f.setText(w.hPeer, head)
+	var endpoint, allowed []string
+	if len(c.WG.Peers) > 0 {
+		p := c.WG.Peers[0]
+		if !p.Endpoint.IsEmpty() {
+			endpoint = []string{p.Endpoint.String()}
+		}
+		for _, a := range p.AllowedIPs {
+			allowed = append(allowed, a.String())
+		}
+	}
+	value(w.endpoint, endpoint, "None")
+	value(w.allowed, allowed, "None")
+	return changed
 }
 
 func (r rect) empty() bool { return r.right <= r.left || r.bottom <= r.top }
@@ -699,12 +827,20 @@ func (w *window) showTab(i int) {
 	}
 	formOK := w.sel != "" && w.cfg != nil
 	f.show(w.problem, w.sel != "" && w.cfgErr != nil && i != tabText)
-	for _, c := range []*control{w.hApps, w.appsNote, w.modeFull, w.modeInclude, w.modeExclude, w.appList, w.appAdd, w.appRemove, w.appHint} {
-		f.show(c, formOK && i == tabApps)
+	vpn := formOK && i == tabVPN
+	for _, c := range []*control{w.hSplit, w.splitOff, w.splitInclude, w.splitExclude, w.modeNote,
+		w.appList, w.appAdd, w.appRemove, w.appHint} {
+		f.show(c, vpn)
 	}
-	for _, c := range []*control{w.hVPN, w.kill, w.lan, w.dns, w.hProxy, w.portLabel, w.port, w.portNote, w.copyAddr,
-		w.via, w.hIface, w.pubLabel, w.pub, w.copyPub, w.addrLabel, w.addrs, w.peerLabel, w.peer} {
-		f.show(c, formOK && i == tabOptions)
+	f.show(w.kill, vpn && w.killShown)
+	f.show(w.lan, vpn && w.killShown)
+	f.show(w.dns, vpn && w.dnsShown)
+	for _, c := range []*control{w.portLabel, w.port, w.portNote, w.copyAddr, w.proxyHint, w.via, w.viaNote} {
+		f.show(c, formOK && i == tabProxy)
+	}
+	for _, c := range []*control{w.hIface, w.pubLabel, w.pub, w.copyPub, w.addrLabel, w.addrs, w.dnsLabel, w.dnsList,
+		w.hPeer, w.endLabel, w.endpoint, w.allowLabel, w.allowed} {
+		f.show(c, formOK && i == tabDetails)
 	}
 	for _, c := range []*control{w.editor, w.parse, w.revert, w.save} {
 		f.show(c, w.sel != "" && i == tabText)
@@ -726,7 +862,7 @@ func (w *window) command(c *control, code uint16) {
 		}
 		return
 	case w.editor:
-		if code == enChange && !w.loading {
+		if code == enChange && !w.loading && !w.coloring {
 			w.checkText()
 		}
 		return
@@ -755,17 +891,17 @@ func (w *window) command(c *control, code uint16) {
 		go w.a.run(name, ipc.AsProxy)
 	case w.reconnect:
 		go w.a.apply(name)
-	case w.tabs[tabApps], w.tabs[tabOptions], w.tabs[tabText]:
+	case w.tabs[tabVPN], w.tabs[tabProxy], w.tabs[tabDetails], w.tabs[tabText]:
 		for i, t := range w.tabs {
 			if t == c && i != w.tab && (w.tab != tabText || w.confirmLeave()) {
 				w.showTab(i)
 			}
 		}
-	case w.modeFull:
+	case w.splitOff:
 		w.setMode(config.ModeFull)
-	case w.modeInclude:
+	case w.splitInclude:
 		w.setMode(config.ModeInclude)
-	case w.modeExclude:
+	case w.splitExclude:
 		w.setMode(config.ModeExclude)
 	case w.appAdd:
 		w.addApps()
@@ -818,6 +954,10 @@ func (w *window) key(c *control, vk uint16) bool {
 }
 
 func (w *window) contextMenu(c *control, x, y int32) {
+	if c == w.editor {
+		w.editorMenu(x, y)
+		return
+	}
 	if c != w.list {
 		return
 	}
@@ -839,6 +979,29 @@ func (w *window) contextMenu(c *control, x, y int32) {
 		{},
 		{text: "Rename...\tF2", run: w.renameTunnel},
 		{text: "Delete...\tDel", run: w.deleteTunnel},
+	}, x, y)
+}
+
+// editorMenu offers the editing commands of the text at the screen point.
+func (w *window) editorMenu(x, y int32) {
+	h := w.editor.hwnd
+	var sel charRange
+	procSendMessageW.Call(h, emExGetSel, 0, uintptr(unsafe.Pointer(&sel)))
+	none := sel.min == sel.max
+	canUndo, _, _ := procSendMessageW.Call(h, emCanUndo, 0, 0)
+	send := func(msg uintptr) func() { return func() { procSendMessageW.Call(h, msg, 0, 0) } }
+	w.f.popup([]menuItem{
+		{text: "Undo\tCtrl+Z", disabled: canUndo == 0, run: send(wmUndo)},
+		{},
+		{text: "Cut\tCtrl+X", disabled: none, run: send(wmCut)},
+		{text: "Copy\tCtrl+C", disabled: none, run: send(wmCopy)},
+		{text: "Paste\tCtrl+V", run: func() { pastePlain(h) }},
+		{text: "Delete\tDel", disabled: none, run: send(wmClear)},
+		{},
+		{text: "Select all\tCtrl+A", run: func() {
+			all := charRange{0, -1}
+			procSendMessageW.Call(h, emExSetSel, 0, uintptr(unsafe.Pointer(&all)))
+		}},
 	}, x, y)
 }
 

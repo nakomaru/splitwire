@@ -11,7 +11,7 @@ import (
 
 func TestImportName(t *testing.T) {
 	cases := map[string]string{
-		"vpn US-WA#23":                    "vpn-US-WA-23",
+		"vpn US-WA#23":                       "vpn-US-WA-23",
 		"wg0":                                "wg0",
 		".hidden":                            "hidden",
 		"a-very-long-file-name-for-a-tunnel": "a-very-long-file-name-for-a-t",

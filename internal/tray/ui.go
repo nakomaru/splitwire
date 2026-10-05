@@ -153,6 +153,8 @@ const (
 	vkDelete        = 0x2E
 	vkF2            = 0x71
 	vkControl       = 0x11
+	vkShift         = 0x10
+	vkInsert        = 0x2D
 	spiNonClientMet = 0x0029
 )
 
@@ -231,6 +233,13 @@ type control struct {
 	// selection of a list as checkboxes, leaving its rows unshaded.
 	empty  string
 	checks bool
+	// tip is the control's tooltip; tipped reports that it has one.
+	tip    string
+	tipped bool
+	// rich makes an edit box a rich edit control, whose text can carry
+	// colors; doc is its text object model.
+	rich bool
+	doc  *comObject
 }
 
 // colors are a form's palette as COLORREF values.
@@ -298,6 +307,10 @@ type form struct {
 	destroyed func()
 	// message handles messages the toolkit leaves alone.
 	message func(msg, wparam, lparam uintptr) (uintptr, bool)
+	// restyle runs after the colors or the DPI change.
+	restyle func()
+	// tips is the tooltip control.
+	tips uintptr
 }
 
 var (
@@ -556,6 +569,9 @@ func (f *form) themeChild(c *control) {
 		name, _ := windows.UTF16PtrFromString(class)
 		procSetWindowTheme.Call(c.hwnd, uintptr(unsafe.Pointer(name)), 0)
 		procSendMessageW.Call(c.hwnd, wmThemeChanged, 0, 0)
+		if c.rich {
+			f.themeRich(c)
+		}
 	}
 }
 
@@ -578,12 +594,17 @@ func (f *form) applyTheme() {
 	for _, c := range f.controls {
 		f.themeChild(c)
 	}
+	f.themeTips()
+	if f.restyle != nil {
+		f.restyle()
+	}
 	procRedrawWindow.Call(f.hwnd, 0, 0, rdwInvalidate|rdwErase|rdwAllChildren|rdwFrame)
 }
 
 // place moves a control to r, in pixels.
 func (f *form) place(c *control, r rect) {
 	c.r = r
+	f.moveTip(c)
 	if c.hwnd == 0 {
 		return
 	}
@@ -620,6 +641,7 @@ func (f *form) show(c *control, on bool) {
 	}
 	c.hidden = !on
 	f.showWindow(c)
+	f.moveTip(c)
 	f.invalidate(c)
 }
 
@@ -1185,12 +1207,21 @@ func runForms(quit func() bool) {
 	}
 }
 
-// shortcut runs a form's save on Ctrl+S.
+// shortcut runs a form's save on Ctrl+S, and pastes text alone into rich
+// edit boxes.
 func (f *form) shortcut(vk uint16) bool {
 	ctrl, _, _ := procGetKeyState.Call(vkControl)
+	shift, _, _ := procGetKeyState.Call(vkShift)
 	if vk == 'S' && int16(ctrl) < 0 && f.save != nil {
 		f.save()
 		return true
+	}
+	if vk == 'V' && int16(ctrl) < 0 || vk == vkInsert && int16(shift) < 0 {
+		focus, _, _ := procGetFocus.Call()
+		if c := f.byHwnd[focus]; c != nil && c.rich {
+			pastePlain(c.hwnd)
+			return true
+		}
 	}
 	return false
 }
@@ -1266,6 +1297,10 @@ func formProcFunc(hwnd, msg, wparam, lparam uintptr) uintptr {
 				m := uintptr(f.px(4))
 				procSendMessageW.Call(c.hwnd, emSetMargins, ecLeftMargin|ecRightMargin, m|m<<16)
 			}
+		}
+		f.themeTips()
+		if f.restyle != nil {
+			f.restyle()
 		}
 		// lparam carries the suggested window rectangle from the system.
 		r := *(**rect)(unsafe.Pointer(&lparam))
