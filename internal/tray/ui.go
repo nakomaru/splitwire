@@ -134,6 +134,7 @@ const (
 	swShowNA        = 8
 	swRestore       = 9
 	swpNoActivate   = 0x0010
+	swpNoCopyBits   = 0x0100
 	tpmReturnCmd    = 0x0100
 	tpmRightButton  = 0x0002
 	mfString        = 0x0000
@@ -220,6 +221,8 @@ type control struct {
 	// r is the control's place, the field around an edit box or list.
 	r      rect
 	hidden bool
+	// placed is where the control's window is.
+	placed rect
 	// itemHeight is a list's row height in device-independent pixels, and
 	// drawItem paints row i.
 	itemHeight int
@@ -600,8 +603,14 @@ func (f *form) place(c *control, r rect) {
 		pad := f.px(3)
 		in = rect{r.left + pad, r.top + pad, r.right - pad, r.bottom - pad}
 	}
+	if in == c.placed {
+		return
+	}
+	c.placed = in
+	// A moved control repaints: copying its old pixels picks up whatever
+	// sibling moved over them first.
 	procSetWindowPos.Call(c.hwnd, 0, uintptr(in.left), uintptr(in.top), uintptr(in.right-in.left), uintptr(in.bottom-in.top),
-		swpNoZOrder|swpNoActivate)
+		swpNoZOrder|swpNoActivate|swpNoCopyBits)
 }
 
 // show hides or shows a control.
@@ -1382,7 +1391,7 @@ func postMessage(hwnd, msg uintptr) {
 
 func messageBox(owner uintptr, text string, flags uint32) int32 {
 	t, _ := windows.UTF16PtrFromString(text)
-	caption, _ := windows.UTF16PtrFromString("splitwire")
+	caption, _ := windows.UTF16PtrFromString("SplitWire")
 	r, _ := windows.MessageBox(windows.HWND(owner), t, caption, flags)
 	return r
 }

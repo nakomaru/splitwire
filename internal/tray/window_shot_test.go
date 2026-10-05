@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -98,6 +99,14 @@ func TestWindowShots(t *testing.T) {
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-apps.png"))
 		w.showTab(tabOptions)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-options.png"))
+		// Switching Office off and on again, captured as painted.
+		starting := office
+		starting.State, starting.Peers = ipc.StateStarting, nil
+		for i, tunnels := range [][]ipc.Tunnel{{warpT}, {starting, warpT}, {office, warpT}, {warpT}} {
+			a.status = ipc.Status{Tunnels: tunnels}
+			w.refresh()
+			capture(t, w.f.hwnd, filepath.Join(out, fmt.Sprintf("%s-switch-%d.png", theme.name, i)))
+		}
 		w.showTab(tabText)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-text.png"))
 		w.pick(1) // WARP, a proxy
@@ -169,10 +178,16 @@ func pump() {
 	}
 }
 
-// shot saves the window's image as a PNG file.
+// shot repaints the window and saves its image as a PNG file.
 func shot(t *testing.T, hwnd uintptr, path string) {
 	const rdwUpdateNow = 0x0100
 	procRedrawWindow.Call(hwnd, 0, 0, rdwInvalidate|rdwErase|rdwAllChildren|rdwFrame|rdwUpdateNow)
+	capture(t, hwnd, path)
+}
+
+// capture saves the window's image as a PNG file once it handles its
+// queued messages.
+func capture(t *testing.T, hwnd uintptr, path string) {
 	pump()
 	var r rect
 	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
