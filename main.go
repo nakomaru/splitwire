@@ -339,7 +339,8 @@ func run(args []string) error {
 			}
 		}
 		if !ok {
-			return errors.New("usage: splitwire manager install [" + strings.Join(installFlags, "] [") + "] | leave [--user=SID] | uninstall")
+			flags := strings.ReplaceAll(strings.Join(installFlags, "] ["), "--user=", "--user=SID")
+			return errors.New("usage: splitwire manager install [" + flags + "] | leave [--user=SID] | uninstall")
 		}
 	case "cleanup":
 		if !onlyFlags(args[1:], cleanupFlags...) {
