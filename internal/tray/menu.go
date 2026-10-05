@@ -91,7 +91,7 @@ func (a *app) rebuild() {
 	a.onClick(a.setupMI, gen, a.setup)
 	a.uninstallMI = systray.AddMenuItem("Uninstall SplitWire...", "Remove everything SplitWire installed")
 	a.onClick(a.uninstallMI, gen, a.uninstall)
-	a.onClick(systray.AddMenuItem("Quit", "Close the app; running tunnels stay up"), gen, systray.Quit)
+	a.onClick(systray.AddMenuItem("Close SplitWire (tunnels stay connected)", "Close the app; running tunnels stay up"), gen, systray.Quit)
 
 	a.refreshLocked()
 }

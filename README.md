@@ -80,8 +80,9 @@ For the selected tunnel:
   updates. Each entry shows its icon and name, and warns when it matches no
   file. With split tunneling off, the list stays in the file for Include
   and Exclude. Below the list are the kill switch with its local network
-  exception, shown for Off and Exclude, and strict DNS, shown when the
-  tunnel sets `DNS`; their tooltips say what they do.
+  exception, and strict DNS. Their tooltips say what they do, and why when
+  they are grayed out: the kill switch has no effect with Include, and
+  strict DNS needs `DNS` servers.
 - **Proxy** holds the settings for running as a proxy: the port (refusing
   ports another tunnel or program holds), a button to copy the address,
   and **Connect through the VPN** (`ProxyVia = vpn`), which spells out the
@@ -113,7 +114,8 @@ Proxies         >  WARP - 127.0.0.1:1080 / backup - port picked from 1080 on fir
 Disconnect all
 Reconnect tunnels when Windows starts
 Start SplitWire at sign-in
-Show manager log, Uninstall SplitWire..., Quit
+Show manager log, Uninstall SplitWire...
+Close SplitWire (tunnels stay connected)
 ```
 
 - **VPN** picks the one tunnel that routes apps by its `Mode`, or Off.
@@ -131,6 +133,9 @@ Show manager log, Uninstall SplitWire..., Quit
   your user's Run entry; the notification area exists only once you sign in.
 - **Uninstall SplitWire...** removes everything, as `splitwire cleanup`
   below, and asks whether to delete your tunnel configurations too.
+- **Close SplitWire** closes the window and the icon. Running tunnels stay
+  connected through the manager service; Off or **Disconnect all** stops
+  them.
 
 The first run opens the install window: checkboxes with descriptions, grouped
 under Install and Startup, and an Install button that asks for administrator

@@ -90,9 +90,6 @@ type window struct {
 	// errLine is the editor's line with a problem, from 1, or 0.
 	errLine int
 	graph   rect
-	// killShown and dnsShown report that the tunnel's mode and DNS give
-	// those settings an effect.
-	killShown, dnsShown bool
 
 	list, add, del                           *control
 	title, rename, status, banner, reconnect *control
@@ -230,11 +227,6 @@ func newWindow(a *app) *window {
 	w.kill = f.add(&control{kind: kindCheck, text: "Kill switch"})
 	w.lan = f.add(&control{kind: kindCheck, text: "Allow the local network"})
 	w.dns = f.add(&control{kind: kindCheck, text: "Use only the tunnel's DNS servers"})
-	f.setTip(w.kill, "Blocks traffic outside the tunnel while it runs, so nothing leaks if the tunnel drops. "+
-		"Excluded apps stay allowed. With AllowedIPs covering every address, it starts out on.")
-	f.setTip(w.lan, "Lets apps reach private addresses, such as the router, printers and other computers at "+
-		"home, past the kill switch.")
-	f.setTip(w.dns, "Blocks DNS servers other than the tunnel's, so name lookups stay inside the tunnel.")
 
 	w.portLabel = f.add(&control{kind: kindLabel, text: "Port"})
 	w.port = f.addEdit(&control{}, esNumber)
@@ -376,19 +368,12 @@ func (w *window) layoutVPN(x0, x1, y, bottom int32) {
 	f.place(w.modeNote, rect{x0, y, x1, y + s(20)})
 	y += s(20) + s(10)
 
-	if w.dnsShown {
-		f.place(w.dns, rect{x0, bottom - s(28), x0 + f.toggleWidth(w.dns), bottom})
-		bottom -= s(30)
-	}
-	if w.killShown {
-		kw := f.toggleWidth(w.kill)
-		f.place(w.kill, rect{x0, bottom - s(28), x0 + kw, bottom})
-		f.place(w.lan, rect{x0 + kw + s(24), bottom - s(28), x0 + kw + s(24) + f.toggleWidth(w.lan), bottom})
-		bottom -= s(30)
-	}
-	if w.dnsShown || w.killShown {
-		bottom -= s(12)
-	}
+	f.place(w.dns, rect{x0, bottom - s(28), x0 + f.toggleWidth(w.dns), bottom})
+	bottom -= s(30)
+	kw := f.toggleWidth(w.kill)
+	f.place(w.kill, rect{x0, bottom - s(28), x0 + kw, bottom})
+	f.place(w.lan, rect{x0 + kw + s(24), bottom - s(28), x0 + kw + s(24) + f.toggleWidth(w.lan), bottom})
+	bottom -= s(30) + s(12)
 	aw := f.buttonWidth(w.appAdd)
 	rw := f.buttonWidth(w.appRemove)
 	f.place(w.appAdd, rect{x0, bottom - bh, x0 + aw, bottom})
@@ -643,9 +628,7 @@ func (w *window) update() {
 		layoutChanged = true
 	}
 	if c := w.cfg; c != nil {
-		if w.updateVPN(c) {
-			layoutChanged = true
-		}
+		w.updateVPN(c)
 		if w.updateProxy(c) {
 			layoutChanged = true
 		}
@@ -661,9 +644,8 @@ func (w *window) update() {
 	}
 }
 
-// updateVPN shows the tunnel's settings as a VPN, and reports whether the
-// layout needs to follow.
-func (w *window) updateVPN(c *config.Config) bool {
+// updateVPN shows the tunnel's settings as a VPN.
+func (w *window) updateVPN(c *config.Config) {
 	f := w.f
 	f.setOn(w.splitOff, c.Mode == config.ModeFull)
 	f.setOn(w.splitInclude, c.Mode == config.ModeInclude)
@@ -686,17 +668,44 @@ func (w *window) updateVPN(c *config.Config) bool {
 	f.setText(w.appHint, hint)
 	f.enable(w.appRemove, len(f.listSelected(w.appList)) > 0)
 
+	// Settings without an effect stay in place, grayed out, with tooltips
+	// saying why.
+	tip := func(c *control, text string) {
+		if c.tip != text {
+			f.setTip(c, text)
+		}
+	}
+	killTip := "Blocks traffic outside the tunnel while it runs, so nothing leaks if the tunnel drops. " +
+		"Excluded apps stay allowed. With AllowedIPs covering every address, it starts out on."
+	killOK := true
+	switch {
+	case c.Mode == config.ModeInclude:
+		killTip = "Off with Include: only the listed apps use the VPN and other apps connect directly, " +
+			"so there is nothing for a kill switch to block."
+		killOK = false
+	case c.WG.Interface.TableOff:
+		killTip = "Off with Table = off, which leaves the tunnel's routes to you."
+		killOK = false
+	}
+	lanTip := "Lets apps reach private addresses, such as the router, printers and other computers at " +
+		"home, past the kill switch."
+	if !c.KillSwitchOn() {
+		lanTip = "Applies while the kill switch is on. " + lanTip
+	}
+	dnsTip := "Blocks DNS servers other than the tunnel's, so name lookups stay inside the tunnel."
+	dnsOK := len(c.WG.Interface.DNS) > 0
+	if !dnsOK {
+		dnsTip = "Needs DNS servers in the tunnel's [Interface]; without them, lookups use the system's servers."
+	}
 	f.setOn(w.kill, c.KillSwitchOn())
+	f.enable(w.kill, killOK)
+	tip(w.kill, killTip)
 	f.setOn(w.lan, c.AllowLAN)
 	f.enable(w.lan, c.KillSwitchOn())
-	f.setOn(w.dns, c.StrictDNS)
-	killShown := c.Mode != config.ModeInclude && !c.WG.Interface.TableOff
-	dnsShown := len(c.WG.Interface.DNS) > 0
-	if killShown == w.killShown && dnsShown == w.dnsShown {
-		return false
-	}
-	w.killShown, w.dnsShown = killShown, dnsShown
-	return true
+	tip(w.lan, lanTip)
+	f.setOn(w.dns, c.StrictDNS && dnsOK)
+	f.enable(w.dns, dnsOK)
+	tip(w.dns, dnsTip)
 }
 
 // updateProxy shows the tunnel's settings as a proxy, and reports whether
@@ -849,9 +858,9 @@ func (w *window) showTab(i int) {
 		w.appList, w.appAdd, w.appRemove, w.appHint} {
 		f.show(c, vpn)
 	}
-	f.show(w.kill, vpn && w.killShown)
-	f.show(w.lan, vpn && w.killShown)
-	f.show(w.dns, vpn && w.dnsShown)
+	f.show(w.kill, vpn)
+	f.show(w.lan, vpn)
+	f.show(w.dns, vpn)
 	for _, c := range []*control{w.portLabel, w.port, w.portNote, w.copyAddr, w.proxyHint, w.via, w.viaNote} {
 		f.show(c, formOK && i == tabProxy)
 	}
