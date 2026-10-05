@@ -56,10 +56,10 @@ func TestWindowShots(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("Office", "[Splitwire]\nMode = include\nApp = C:\\Windows\\System32\\curl.exe\n"+
+	write("Office", "[SplitWire]\nMode = include\nApp = C:\\Windows\\System32\\curl.exe\n"+
 		"App = C:\\Program Files\\Mozilla Firefox\\firefox.exe\nApp = %LOCALAPPDATA%\\Discord\\app-*\\Discord.exe\n"+
 		"App = C:\\Games\\Missing\\game.exe\n"+config.ExampleSection)
-	write("WARP", "[Splitwire]\nProxy = 1080\n"+config.ExampleSection)
+	write("WARP", "[SplitWire]\nProxy = 1080\n"+config.ExampleSection)
 	write("home", config.ExampleSection)
 	dir, _ := userconf.Dir()
 	os.WriteFile(filepath.Join(dir, "broken.conf"), []byte("[Interface]\nPrivateKey = nope\n"), 0o600)

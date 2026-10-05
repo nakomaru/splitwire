@@ -36,14 +36,14 @@ splitwire install home     # or run as a service that starts at boot
 
 Configurations live in `%APPDATA%\splitwire\<name>.conf`; commands take the
 name, or a path to a `.conf` anywhere else. A configuration is an ordinary
-WireGuard `.conf` plus an optional `[Splitwire]` section; see
+WireGuard `.conf` plus an optional `[SplitWire]` section; see
 [example.conf](example.conf). `splitwire apps firefox` lists running
 programs whose paths contain "firefox", for filling in `App` lines.
 
 `import` copies tunnels out of the WireGuard app. The app keeps them
 encrypted for the SYSTEM account, so SplitWire decrypts them through a
 temporary service that runs as SYSTEM and deletes itself afterward. Each
-imported file ends with a commented `[Splitwire]` section. `up <name>`
+imported file ends with a commented `[SplitWire]` section. `up <name>`
 imports that tunnel by itself when its file does not exist yet.
 
 Commands that change the system ask for administrator rights through UAC
@@ -69,15 +69,16 @@ For the selected tunnel:
   shows the connection, and while it runs a graph shows the received and
   sent rates of the last three minutes with the totals. A tunnel edited
   since it connected offers **Reconnect**.
-- **Apps** picks the mode: all apps, only the listed apps, or all but the
-  listed apps. **Add apps** offers the programs running now, the ones
+- **Apps** sets split tunneling for when the tunnel runs as the VPN: Off
+  (every app, routed by `AllowedIPs`), Include (only the listed apps) or
+  Exclude (every app but the listed ones). **Add apps** offers the programs running now, the ones
   Explorer recorded as recently started (when Windows tracks app launches)
   and the Start menu's, with a search box that also takes a typed path or
   pattern, and **Browse...**. Folders named for a version become `*`, so
   `...\Discord\app-1.0.9163\Discord.exe` is added as
   `...\Discord\app-*\Discord.exe` and keeps working after updates. Each
   entry shows its icon and name, and warns when it matches no file. With
-  all apps picked, the list stays in the file for the other two choices.
+  split tunneling off, the list stays in the file for Include and Exclude.
 - **Options** sets the kill switch, the local network exception, strict
   DNS, the proxy port (refusing ports another tunnel or program holds) and
   routing the proxy through the VPN, and shows the public key, addresses
@@ -230,7 +231,7 @@ tunnel, and stop while no VPN runs.
 `install` expands `%VARIABLES%` and globs in `App` lines as the installing
 user, because the service runs as SYSTEM with a different profile.
 
-## `[Splitwire]` keys
+## `[SplitWire]` keys
 
 | Key | Values | Default |
 |---|---|---|

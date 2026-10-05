@@ -11,23 +11,23 @@ func TestSetKey(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{
 			"[Interface]\r\nAddress = 10.0.0.2/32\r\n",
-			"[Interface]\r\nAddress = 10.0.0.2/32\r\n\r\n[Splitwire]\r\nProxy = 1080\r\n",
+			"[Interface]\r\nAddress = 10.0.0.2/32\r\n\r\n[SplitWire]\r\nProxy = 1080\r\n",
 		},
 		{
-			"[Interface]\n\n# [Splitwire]\n# Mode = include\n",
-			"[Interface]\n\n# [Splitwire]\n# Mode = include\n\n[Splitwire]\nProxy = 1080\n",
+			"[Interface]\n\n# [SplitWire]\n# Mode = include\n",
+			"[Interface]\n\n# [SplitWire]\n# Mode = include\n\n[SplitWire]\nProxy = 1080\n",
 		},
 		{
 			"[Interface]\n\n[splitwire]  # options\nMode = full\n",
 			"[Interface]\n\n[splitwire]  # options\nMode = full\nProxy = 1080\n",
 		},
 		{
-			"[Interface]\n\n[Splitwire]\nMode = full\n\n[Splitwire]\n  proxy = 2000 # old\n",
-			"[Interface]\n\n[Splitwire]\nMode = full\n\n[Splitwire]\nProxy = 1080\n",
+			"[Interface]\n\n[SplitWire]\nMode = full\n\n[SplitWire]\n  proxy = 2000 # old\n",
+			"[Interface]\n\n[SplitWire]\nMode = full\n\n[SplitWire]\nProxy = 1080\n",
 		},
 		{
-			"[Interface]\n# Proxy = 9\n\n# [Splitwire]\n",
-			"[Interface]\n# Proxy = 9\n\n# [Splitwire]\n\n[Splitwire]\nProxy = 1080\n",
+			"[Interface]\n# Proxy = 9\n\n# [SplitWire]\n",
+			"[Interface]\n# Proxy = 9\n\n# [SplitWire]\n\n[SplitWire]\nProxy = 1080\n",
 		},
 	}
 	for i, c := range cases {

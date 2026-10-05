@@ -3,7 +3,7 @@ package config
 import "testing"
 
 func TestParseProxy(t *testing.T) {
-	c, err := Parse(base+"\n[Splitwire]\nProxy = 1081\nProxyVia = vpn\n", "warp")
+	c, err := Parse(base+"\n[SplitWire]\nProxy = 1081\nProxyVia = vpn\n", "warp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestParseProxy(t *testing.T) {
 			t.Errorf("ParseProxy(%s) accepted", v)
 		}
 	}
-	if _, err := Parse(base+"\n[Splitwire]\nProxyVia = maybe\n", "x"); err == nil {
+	if _, err := Parse(base+"\n[SplitWire]\nProxyVia = maybe\n", "x"); err == nil {
 		t.Error("ProxyVia = maybe accepted")
 	}
 }

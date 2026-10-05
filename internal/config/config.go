@@ -1,5 +1,5 @@
 // Package config reads tunnel configurations: a WireGuard .conf file with an
-// optional [Splitwire] section. Without that section the file is an ordinary
+// optional [SplitWire] section. Without that section the file is an ordinary
 // WireGuard configuration, and the WireGuard app ignores nothing it needs.
 package config
 
@@ -248,7 +248,7 @@ func (c *Config) set(key, val string) error {
 			return fmt.Errorf("ProxyVia must be auto or vpn, not %q", val)
 		}
 	default:
-		return fmt.Errorf("unknown [Splitwire] key %q", key)
+		return fmt.Errorf("unknown [SplitWire] key %q", key)
 	}
 	return nil
 }
@@ -393,7 +393,7 @@ func (c *Config) WithExpandedApps() (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(c.wgText, "\r\n \t"))
-	b.WriteString("\n\n[Splitwire]\n")
+	b.WriteString("\n\n[SplitWire]\n")
 	fmt.Fprintf(&b, "Mode = %s\n", c.Mode)
 	for _, p := range paths {
 		fmt.Fprintf(&b, "App = %s\n", p)

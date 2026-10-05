@@ -27,7 +27,7 @@ func TestConfigParses(t *testing.T) {
 	if len(c.WG.Interface.Addresses) != 2 || !c.HasDefaultRoute() || c.Mode != config.ModeFull {
 		t.Fatalf("parsed %+v", c.WG.Interface)
 	}
-	if !strings.Contains(text, "WarpToken = secret") || !strings.Contains(text, "[Splitwire]") {
+	if !strings.Contains(text, "WarpToken = secret") || !strings.Contains(text, "[SplitWire]") {
 		t.Fatal("token or example section missing")
 	}
 }

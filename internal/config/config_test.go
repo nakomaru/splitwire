@@ -20,7 +20,7 @@ AllowedIPs = 0.0.0.0/0, ::/0
 
 func TestParseInclude(t *testing.T) {
 	c, err := Parse(base+`
-[Splitwire]
+[SplitWire]
 Mode = include  # comment
 App = C:\Program Files\Mozilla Firefox\firefox.exe
 App = %SystemRoot%\System32\curl.exe
@@ -57,7 +57,7 @@ func TestByteOrderMark(t *testing.T) {
 }
 
 func TestSectionBeforePeer(t *testing.T) {
-	text := strings.Replace(base, "[Peer]", "[Splitwire]\nMode = exclude\nApp = C:\\x.exe\n\n[Peer]", 1)
+	text := strings.Replace(base, "[Peer]", "[SplitWire]\nMode = exclude\nApp = C:\\x.exe\n\n[Peer]", 1)
 	c, err := Parse(text, "home")
 	if err != nil {
 		t.Fatal(err)
@@ -86,18 +86,18 @@ func TestPlainWireGuardConfig(t *testing.T) {
 
 func TestParseErrors(t *testing.T) {
 	cases := map[string]string{
-		"unknown key":          "[Splitwire]\nColor = blue\n",
-		"include without apps": "[Splitwire]\nMode = include\n",
-		"apps in full mode":    "[Splitwire]\nApp = C:\\x.exe\n",
-		"bad mode":             "[Splitwire]\nMode = sideways\n",
-		"bad switch":           "[Splitwire]\nAllowLAN = maybe\n",
+		"unknown key":          "[SplitWire]\nColor = blue\n",
+		"include without apps": "[SplitWire]\nMode = include\n",
+		"apps in full mode":    "[SplitWire]\nApp = C:\\x.exe\n",
+		"bad mode":             "[SplitWire]\nMode = sideways\n",
+		"bad switch":           "[SplitWire]\nAllowLAN = maybe\n",
 	}
 	for name, section := range cases {
 		if _, err := Parse(base+section, "home"); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if _, err := Parse(strings.Replace(base, "[Interface]", "[Interface]\nTable = off", 1)+"[Splitwire]\nMode = include\nApp = C:\\x.exe\n", "home"); err == nil {
+	if _, err := Parse(strings.Replace(base, "[Interface]", "[Interface]\nTable = off", 1)+"[SplitWire]\nMode = include\nApp = C:\\x.exe\n", "home"); err == nil {
 		t.Error("include mode with Table = off accepted")
 	}
 }
@@ -109,7 +109,7 @@ func TestExpandGlobs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c, err := Parse(base+"[Splitwire]\nMode = include\nApp = "+filepath.Join(dir, "*.exe")+"\nApp = "+filepath.Join(dir, "none*.exe")+"\n", "home")
+	c, err := Parse(base+"[SplitWire]\nMode = include\nApp = "+filepath.Join(dir, "*.exe")+"\nApp = "+filepath.Join(dir, "none*.exe")+"\n", "home")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestExpandGlobs(t *testing.T) {
 }
 
 func TestWithExpandedApps(t *testing.T) {
-	c, err := Parse(base+"[Splitwire]\nMode = include\nApp = %SystemRoot%\\notepad.exe\n", "home")
+	c, err := Parse(base+"[SplitWire]\nMode = include\nApp = %SystemRoot%\\notepad.exe\n", "home")
 	if err != nil {
 		t.Fatal(err)
 	}

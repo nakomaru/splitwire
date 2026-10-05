@@ -51,7 +51,7 @@ func TestRoutesFull(t *testing.T) {
 }
 
 func TestRoutesInclude(t *testing.T) {
-	got := routeSet(t, conf+"[Splitwire]\nMode = include\nApp = C:\\x.exe\n")
+	got := routeSet(t, conf+"[SplitWire]\nMode = include\nApp = C:\\x.exe\n")
 	want := map[string]uint32{
 		"0.0.0.0/0":       IncludeDefaultMetric,
 		"192.168.50.0/24": 0,
@@ -70,7 +70,7 @@ func TestRoutesInclude(t *testing.T) {
 }
 
 func TestRoutesIncludeWithoutDefault(t *testing.T) {
-	c, err := config.Parse(strings.Replace(conf, "0.0.0.0/1, 128.0.0.0/1, ", "", 1)+"[Splitwire]\nMode = include\nApp = C:\\x.exe\n", "home")
+	c, err := config.Parse(strings.Replace(conf, "0.0.0.0/1, 128.0.0.0/1, ", "", 1)+"[SplitWire]\nMode = include\nApp = C:\\x.exe\n", "home")
 	if err != nil {
 		t.Fatal(err)
 	}

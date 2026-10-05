@@ -451,7 +451,7 @@ func importTunnels(args []string) error {
 		return err
 	}
 	if len(res.Imported) > 0 {
-		log.Printf("Each imported file ends with a commented [Splitwire] section to edit")
+		log.Printf("Each imported file ends with a commented [SplitWire] section to edit")
 	}
 	return nil
 }

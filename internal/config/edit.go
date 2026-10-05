@@ -4,7 +4,7 @@ import "strings"
 
 // Edits of configuration text keep its comments, blank lines, line endings
 // and the order of its lines. A setting the text lacks goes after the last
-// setting of its first [Splitwire] section, or into a new section at the
+// setting of its first [SplitWire] section, or into a new section at the
 // end.
 
 // lineSplit splits text into lines and reports its line ending.
@@ -30,7 +30,7 @@ func sectionLine(line string) (header, key string) {
 	return "", ""
 }
 
-// settingLines finds the [Splitwire] settings: the line indexes of each
+// settingLines finds the [SplitWire] settings: the line indexes of each
 // key, the first section's header and the last setting in that section.
 // first is -1 without a section.
 func settingLines(lines []string) (keys map[string][]int, first, last int) {
@@ -64,7 +64,7 @@ func insertAt(lines []string, i int, entries []string) []string {
 		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 			lines = lines[:len(lines)-1]
 		}
-		lines = append(lines, "", "[Splitwire]")
+		lines = append(lines, "", "[SplitWire]")
 		return append(append(lines, entries...), "")
 	}
 	out := append([]string{}, lines[:i]...)
@@ -85,7 +85,7 @@ func without(lines []string, drop []int) []string {
 	return out
 }
 
-// SetValue sets key = val in the [Splitwire] section of text: it replaces
+// SetValue sets key = val in the [SplitWire] section of text: it replaces
 // the key's line and drops any repeats of it. A key the text lacks is added
 // unless val is its default, given by isDefault.
 func SetValue(text, key, val string, isDefault bool) string {

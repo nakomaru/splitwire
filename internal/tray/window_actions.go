@@ -127,7 +127,7 @@ func (w *window) removeApps() {
 		}
 	}
 	if len(kept) == 0 && w.cfg.Mode != config.ModeFull {
-		messageBox(w.f.hwnd, "This choice needs at least one app. To remove them all, pick \"All apps\" first.", windows.MB_ICONINFORMATION)
+		messageBox(w.f.hwnd, "Include and Exclude need at least one app. To remove them all, turn split tunneling off first.", windows.MB_ICONINFORMATION)
 		return
 	}
 	w.edit(func(text string) string { return config.SetApps(text, kept) })

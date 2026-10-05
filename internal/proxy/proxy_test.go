@@ -103,7 +103,7 @@ PublicKey = %s
 Endpoint = 127.0.0.1:%d
 AllowedIPs = 10.9.0.0/24
 
-[Splitwire]
+[SplitWire]
 Proxy = %d
 `, key.String(), srvPub.String(), srvPort, freePort(t))
 	c, err := config.Parse(text, "test")

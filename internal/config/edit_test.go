@@ -11,12 +11,12 @@ func TestSetValue(t *testing.T) {
 		isDefault    bool
 		want         string
 	}{
-		{"[Interface]\n", "Mode", "include", false, "[Interface]\n\n[Splitwire]\nMode = include\n"},
+		{"[Interface]\n", "Mode", "include", false, "[Interface]\n\n[SplitWire]\nMode = include\n"},
 		{"[Interface]\n", "KillSwitch", "auto", true, "[Interface]\n"},
-		{"[Splitwire]\nMode = include\n# AllowLAN = off\n", "AllowLAN", "on", false,
-			"[Splitwire]\nMode = include\nAllowLAN = on\n# AllowLAN = off\n"},
-		{"[Splitwire]\r\nAllowLAN = on\r\nallowlan = off\r\n", "AllowLAN", "off", true, "[Splitwire]\r\nAllowLAN = off\r\n"},
-		{"[Splitwire]\n# Mode = include\n", "Mode", "exclude", false, "[Splitwire]\nMode = exclude\n# Mode = include\n"},
+		{"[SplitWire]\nMode = include\n# AllowLAN = off\n", "AllowLAN", "on", false,
+			"[SplitWire]\nMode = include\nAllowLAN = on\n# AllowLAN = off\n"},
+		{"[SplitWire]\r\nAllowLAN = on\r\nallowlan = off\r\n", "AllowLAN", "off", true, "[SplitWire]\r\nAllowLAN = off\r\n"},
+		{"[SplitWire]\n# Mode = include\n", "Mode", "exclude", false, "[SplitWire]\nMode = exclude\n# Mode = include\n"},
 	}
 	for i, c := range cases {
 		if got := SetValue(c.in, c.key, c.val, c.isDefault); got != c.want {
@@ -31,12 +31,12 @@ func TestSetApps(t *testing.T) {
 		apps []string
 		want string
 	}{
-		{"[Splitwire]\nMode = include\nApp = C:\\a.exe\nKillSwitch = on\nApp = C:\\b.exe\n", []string{`C:\c.exe`},
-			"[Splitwire]\nMode = include\nApp = C:\\c.exe\nKillSwitch = on\n"},
-		{"[Splitwire]\nAllowLAN = on\nMode = exclude\n# App = C:\\x.exe\n", []string{`C:\a.exe`, `C:\b.exe`},
-			"[Splitwire]\nAllowLAN = on\nMode = exclude\nApp = C:\\a.exe\nApp = C:\\b.exe\n# App = C:\\x.exe\n"},
-		{"[Splitwire]\nMode = include\nApp = C:\\a.exe\n", nil, "[Splitwire]\nMode = include\n"},
-		{"[Interface]\n", []string{`C:\a.exe`}, "[Interface]\n\n[Splitwire]\nApp = C:\\a.exe\n"},
+		{"[SplitWire]\nMode = include\nApp = C:\\a.exe\nKillSwitch = on\nApp = C:\\b.exe\n", []string{`C:\c.exe`},
+			"[SplitWire]\nMode = include\nApp = C:\\c.exe\nKillSwitch = on\n"},
+		{"[SplitWire]\nAllowLAN = on\nMode = exclude\n# App = C:\\x.exe\n", []string{`C:\a.exe`, `C:\b.exe`},
+			"[SplitWire]\nAllowLAN = on\nMode = exclude\nApp = C:\\a.exe\nApp = C:\\b.exe\n# App = C:\\x.exe\n"},
+		{"[SplitWire]\nMode = include\nApp = C:\\a.exe\n", nil, "[SplitWire]\nMode = include\n"},
+		{"[Interface]\n", []string{`C:\a.exe`}, "[Interface]\n\n[SplitWire]\nApp = C:\\a.exe\n"},
 	}
 	for i, c := range cases {
 		if got := SetApps(c.in, c.apps); got != c.want {
@@ -59,7 +59,7 @@ func TestEditExample(t *testing.T) {
 	if c.Mode != ModeInclude || len(c.Apps) != 1 || c.Proxy.Port() != 1081 {
 		t.Fatalf("parsed %+v", c)
 	}
-	want := "[Splitwire]\nMode = include\nApp = C:\\Windows\\System32\\curl.exe\nProxy = 1081\n# Settings for splitwire"
+	want := "[SplitWire]\nMode = include\nApp = C:\\Windows\\System32\\curl.exe\nProxy = 1081\n# Settings for splitwire"
 	if !strings.Contains(text, want) {
 		t.Fatalf("settings not at the top of the section:\n%s", text)
 	}
@@ -73,7 +73,7 @@ func TestEditExample(t *testing.T) {
 // TestFullKeepsApps checks that an explicit Mode = full keeps App entries
 // unused, while App entries without a Mode stay an error.
 func TestFullKeepsApps(t *testing.T) {
-	c, err := Parse(base+"\n[Splitwire]\nMode = full\nApp = C:\\a.exe\n", "home")
+	c, err := Parse(base+"\n[SplitWire]\nMode = full\nApp = C:\\a.exe\n", "home")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestFullKeepsApps(t *testing.T) {
 	if err != nil || strings.Contains(text, "App =") {
 		t.Fatalf("expanded %q, %v", text, err)
 	}
-	if _, err := Parse(base+"\n[Splitwire]\nApp = C:\\a.exe\n", "home"); err == nil {
+	if _, err := Parse(base+"\n[SplitWire]\nApp = C:\\a.exe\n", "home"); err == nil {
 		t.Fatal("App without Mode parsed")
 	}
 }

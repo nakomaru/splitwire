@@ -150,7 +150,7 @@ func portFree(ap netip.AddrPort) bool {
 // EnsureProxy returns the Proxy address of the configuration at path. A
 // configuration without one gets the lowest port from FirstProxyPort up
 // that no other tunnel in Dir claims and nothing listens on, written to its
-// [Splitwire] section so apps can keep using that address.
+// [SplitWire] section so apps can keep using that address.
 func EnsureProxy(path string) (netip.AddrPort, error) {
 	c, err := config.Load(path)
 	if err != nil {
@@ -205,7 +205,7 @@ func SetProxyPort(path string, port uint16, running bool) error {
 	return setKey(path, "Proxy", val)
 }
 
-// setKey sets key = val in the file's [Splitwire] section.
+// setKey sets key = val in the file's [SplitWire] section.
 func setKey(path, key, val string) error {
 	return Update(path, func(text string) string { return config.SetValue(text, key, val, false) })
 }

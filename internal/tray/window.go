@@ -199,11 +199,11 @@ func newWindow(a *app) *window {
 	}
 	w.problem = f.add(&control{kind: kindLabel, color: labelError, wrap: true})
 
-	w.hApps = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Apps that use it as the VPN"})
-	w.appsNote = f.add(&control{kind: kindLabel, color: labelSubtle, text: "As a proxy, it carries any app set to use its address."})
-	w.modeFull = f.add(&control{kind: kindRadio, text: "All apps, routed by AllowedIPs"})
-	w.modeInclude = f.add(&control{kind: kindRadio, text: "Only the apps below"})
-	w.modeExclude = f.add(&control{kind: kindRadio, text: "All apps except the apps below"})
+	w.hApps = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Split tunneling"})
+	w.appsNote = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Applies when it runs as the VPN. As a proxy, it carries any app set to use it."})
+	w.modeFull = f.add(&control{kind: kindRadio, text: "Off: every app, routed by AllowedIPs"})
+	w.modeInclude = f.add(&control{kind: kindRadio, text: "Include: only the apps below"})
+	w.modeExclude = f.add(&control{kind: kindRadio, text: "Exclude: every app except the apps below"})
 	w.appList = f.addList(&control{itemHeight: 46, empty: "No apps yet. Add the apps this tunnel should cover."}, lbsExtendedSel)
 	w.appList.drawItem = w.drawApp
 	w.appAdd = f.add(&control{kind: kindButton, text: "Add apps", glyph: glyphAdd})
@@ -582,9 +582,9 @@ func (w *window) update() {
 		hint := "Programs an app starts follow it."
 		w.appList.empty = "No apps yet."
 		if c.Mode == config.ModeFull {
-			w.appList.empty = "Every app uses it as the VPN. To split it by app, pick one of the other two choices."
+			w.appList.empty = "Split tunneling is off, so every app uses the VPN. Pick Include or Exclude to choose apps."
 			if len(c.Apps) > 0 {
-				hint = "Kept for the other two choices; every app uses it as the VPN now."
+				hint = "Kept for Include and Exclude; split tunneling is off."
 			}
 		}
 		f.setText(w.appHint, hint)

@@ -75,7 +75,7 @@ func Recycle(name string) error {
 }
 
 // NewEmpty creates a tunnel with a fresh private key and the example
-// [Splitwire] section, to fill in with a peer.
+// [SplitWire] section, to fill in with a peer.
 func NewEmpty() (string, error) {
 	key, err := conf.NewPrivateKey()
 	if err != nil {
@@ -87,7 +87,7 @@ func NewEmpty() (string, error) {
 }
 
 // Import copies a WireGuard configuration file in as a tunnel named after
-// the file, adding the example [Splitwire] section when it has none.
+// the file, adding the example [SplitWire] section when it has none.
 func Import(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -127,7 +127,7 @@ func importName(base string) string {
 func hasSection(text string) bool {
 	for _, line := range strings.Split(text, "\n") {
 		code, _, _ := strings.Cut(line, "#")
-		if strings.EqualFold(strings.TrimSpace(code), "[Splitwire]") {
+		if strings.EqualFold(strings.TrimSpace(code), "[SplitWire]") {
 			return true
 		}
 	}

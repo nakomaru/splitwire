@@ -48,7 +48,7 @@ func TestNewEmptyAndImport(t *testing.T) {
 		t.Fatalf("imported as %s", got)
 	}
 	imported, _ := os.ReadFile(filepath.Join(filepath.Dir(path), got+".conf"))
-	if !strings.Contains(string(imported), "[Splitwire]") {
+	if !strings.Contains(string(imported), "[SplitWire]") {
 		t.Fatal("import lacks the example section")
 	}
 	if err := Rename(got, "office"); err != nil {
