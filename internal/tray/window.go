@@ -242,10 +242,8 @@ func newWindow(a *app) *window {
 	w.copyAddr = f.add(&control{kind: kindButton, text: "Copy address", glyph: glyphCopy})
 	w.proxyHint = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true,
 		text: "Apps use the tunnel through their SOCKS5 or HTTP proxy setting, pointed at this address."})
-	w.via = f.add(&control{kind: kindCheck, text: "Chain through the VPN"})
-	w.viaNote = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true,
-		text: "Sends the proxy's encrypted traffic through the tunnel running as the VPN, so this tunnel's " +
-			"server sees the VPN's address. While no VPN runs, the proxy waits."})
+	w.via = f.add(&control{kind: kindCheck, text: "Connect through the VPN"})
+	w.viaNote = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true})
 
 	w.hIface = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Interface"})
 	w.pubLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Public key"})
@@ -648,7 +646,9 @@ func (w *window) update() {
 		if w.updateVPN(c) {
 			layoutChanged = true
 		}
-		w.updateProxy(c)
+		if w.updateProxy(c) {
+			layoutChanged = true
+		}
 		if w.updateDetails(c) {
 			layoutChanged = true
 		}
@@ -699,8 +699,9 @@ func (w *window) updateVPN(c *config.Config) bool {
 	return true
 }
 
-// updateProxy shows the tunnel's settings as a proxy.
-func (w *window) updateProxy(c *config.Config) {
+// updateProxy shows the tunnel's settings as a proxy, and reports whether
+// the layout needs to follow.
+func (w *window) updateProxy(c *config.Config) bool {
 	f := w.f
 	f.setOn(w.via, c.ProxyVia == config.ViaVPN)
 	note := "Picks a free port from 1080 up"
@@ -709,6 +710,22 @@ func (w *window) updateProxy(c *config.Config) {
 	}
 	f.setText(w.portNote, note)
 	f.enable(w.copyAddr, c.Proxy.IsValid())
+
+	// The path names the tunnels: the one running as the VPN, if another
+	// one does, and this one, the exit.
+	vpn := "the VPN"
+	for _, t := range w.snap.status.Tunnels {
+		if t.As == ipc.AsVPN && t.Name != w.sel && t.Running() {
+			vpn = t.Name
+		}
+	}
+	path := fmt.Sprintf("Apps \u2192 %s \u2192 %s \u2192 the internet. Sites see %s's address, and %s's server "+
+		"sees %s's address instead of yours. While no VPN runs, the proxy waits.", vpn, w.sel, w.sel, w.sel, vpn)
+	if path == w.viaNote.text {
+		return false
+	}
+	f.setText(w.viaNote, path)
+	return true
 }
 
 // updateDetails shows the tunnel's interface and first peer, and reports

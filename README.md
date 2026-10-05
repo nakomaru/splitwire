@@ -84,7 +84,8 @@ For the selected tunnel:
   tunnel sets `DNS`; their tooltips say what they do.
 - **Proxy** holds the settings for running as a proxy: the port (refusing
   ports another tunnel or program holds), a button to copy the address,
-  and **Chain through the VPN** (`ProxyVia = vpn`).
+  and **Connect through the VPN** (`ProxyVia = vpn`), which spells out the
+  path: apps, then the VPN, then this tunnel, whose address sites see.
 - **Details** shows the public key, with a button to copy it, the
   addresses, the DNS servers, and the first peer's endpoint and allowed IPs.
 - **Text** edits the whole file with its sections, keys, values and
