@@ -88,16 +88,6 @@ func Run(args []string) error {
 	return nil
 }
 
-// offerDelete asks whether to delete the setup file self now that the
-// installed copy runs, and returns the arguments that hand the deletion to
-// the installed copy.
-func offerDelete(self string) []string {
-	if !ask("splitwire is installed in Program Files.\n\nDelete the setup file?\n\n" + self) {
-		return nil
-	}
-	return []string{deleteFlag, self, strconv.Itoa(os.Getpid())}
-}
-
 // deleteSetup deletes the setup file at path once the process that ran it
 // has exited. It deletes only a file identical to the installed copy.
 func deleteSetup(path string, pid uint32, installed string) {
@@ -197,30 +187,6 @@ func startTray(exe string, args ...string) error {
 	return exec.Command(exe, append([]string{Command}, args...)...).Start()
 }
 
-// handOver runs the installed copy instead of this one, offering to update
-// it to this copy when they differ, and then to delete this copy.
-func handOver(self, installed string) error {
-	var deleteArgs []string
-	if !sameContent(self, installed) {
-		if ask("This copy of splitwire differs from the installed one.\n\n" +
-			"Update the installed splitwire to this copy? Running tunnels reconnect, " +
-			"and Windows asks for administrator rights.") {
-			if !runElevated(self, "manager", "install") {
-				return nil
-			}
-			if err := quitRunningTray(); err != nil {
-				errorBox("%v", err)
-				return nil
-			}
-			deleteArgs = offerDelete(self)
-		}
-	}
-	if trayRunning() {
-		return nil
-	}
-	return startTray(installed, deleteArgs...)
-}
-
 // ---- dialogs ----
 
 func errorBox(format string, args ...any) {
@@ -228,27 +194,6 @@ func errorBox(format string, args ...any) {
 	caption, _ := windows.UTF16PtrFromString("splitwire")
 	windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR|windows.MB_SETFOREGROUND)
 }
-
-func ask(text string) bool {
-	t, _ := windows.UTF16PtrFromString(text)
-	caption, _ := windows.UTF16PtrFromString("splitwire")
-	r, _ := windows.MessageBox(0, t, caption, windows.MB_YESNO|windows.MB_ICONQUESTION|windows.MB_SETFOREGROUND)
-	return r == idYes
-}
-
-// askNo asks a yes or no question with No as the default button.
-func askNo(text string) bool {
-	t, _ := windows.UTF16PtrFromString(text)
-	caption, _ := windows.UTF16PtrFromString("splitwire")
-	r, _ := windows.MessageBox(0, t, caption, windows.MB_YESNO|windows.MB_ICONWARNING|mbDefButton2|windows.MB_SETFOREGROUND)
-	return r == idYes
-}
-
-// MessageBox values.
-const (
-	idYes        = 6
-	mbDefButton2 = 0x00000100
-)
 
 // runElevated runs a CLI command of exe elevated in a console window that
 // stays open on failure, so its error is readable there. It reports
@@ -270,67 +215,6 @@ func selfExe() string {
 // ---- setup and uninstall ----
 
 func (a *app) importTunnels() { runElevated(selfExe(), "import") }
-
-// offerSetup asks once per run to set splitwire up when the manager
-// service is missing.
-func (a *app) offerSetup() {
-	a.setupOnce.Do(func() {
-		if ask("Set up splitwire?\n\n" +
-			"It installs into Program Files with a background service that connects " +
-			"tunnels without further prompts, and starts at sign-in. Windows asks " +
-			"for administrator rights once.") {
-			a.setup()
-		}
-	})
-}
-
-// setup installs the manager service and this executable, turns on start
-// at sign-in, and switches to the installed copy.
-func (a *app) setup() {
-	if !runElevated(selfExe(), "manager", "install") {
-		return
-	}
-	installed, err := installedExe()
-	if err != nil {
-		errorBox("%v", err)
-		return
-	}
-	if err := setRunAtLogin(true); err != nil {
-		errorBox("Could not turn on start at sign-in:\n\n%v", err)
-	}
-	if !samePath(selfExe(), installed) {
-		a.next = installed
-		a.nextArgs = offerDelete(selfExe())
-		systray.Quit()
-		return
-	}
-	a.refreshLogin()
-	select {
-	case a.retry <- struct{}{}:
-	default:
-	}
-}
-
-func (a *app) uninstall() {
-	if !ask("Uninstall splitwire?\n\n" +
-		"This disconnects every tunnel and removes everything splitwire installed: " +
-		"its services, the split tunnel driver, its firewall objects, " +
-		"Program Files\\splitwire and the sign-in entry. The WireGuardNT driver " +
-		"stays when the WireGuard app is installed. Windows asks for administrator rights.") {
-		return
-	}
-	args := []string{"cleanup"}
-	if askNo("Also delete your tunnel configurations in %APPDATA%\\splitwire?\n\n" +
-		"They hold your private keys. Keep them to set splitwire up again later " +
-		"or to import them elsewhere.") {
-		args = append(args, "--configs")
-	}
-	if !runElevated(selfExe(), args...) {
-		return
-	}
-	setRunAtLogin(false)
-	systray.Quit()
-}
 
 // ---- start at sign-in ----
 

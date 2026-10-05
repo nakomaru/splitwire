@@ -43,10 +43,20 @@ const (
 	legacyBootConf = "autostart.conf"
 )
 
-// Install copies the executables into the install root and registers and
+// Options are the choices of a manager install.
+type Options struct {
+	// StartMenu adds the Start menu shortcut. An existing shortcut is
+	// rewritten either way.
+	StartMenu bool
+	// Boot turns on bringing running tunnels back up at boot, unless a
+	// list of boot tunnels exists already.
+	Boot bool
+}
+
+// Install copies the executable into the install root and registers and
 // starts the manager service for the calling user. Installing again
-// updates the executables and restarts the service.
-func Install() error {
+// updates the executable and restarts the service.
+func Install(opts Options) error {
 	if err := bootstrap.EnsureDirs(); err != nil {
 		return err
 	}
@@ -56,8 +66,23 @@ func Install() error {
 	}
 	bootstrap.RemoveLegacyTray()
 	if lnk, err := shortcut.StartMenu(StartMenuName); err == nil {
-		if err := shortcut.Create(lnk, exe, tray.Command, "WireGuard with per-app split tunneling"); err != nil {
-			log.Printf("Warning: Start menu shortcut: %v", err)
+		_, statErr := os.Stat(lnk)
+		if opts.StartMenu || statErr == nil {
+			if err := shortcut.Create(lnk, exe, tray.Command, "WireGuard with per-app split tunneling"); err != nil {
+				log.Printf("Warning: Start menu shortcut: %v", err)
+			} else {
+				log.Printf("Start menu shortcut: %s", lnk)
+			}
+		}
+	}
+	if opts.Boot {
+		if dir, err := bootstrap.ConfigsDir(); err == nil {
+			path := filepath.Join(dir, bootFile)
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				if err := writeBoot(path, nil); err != nil {
+					log.Printf("Warning: turn on boot start: %v", err)
+				}
+			}
 		}
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()

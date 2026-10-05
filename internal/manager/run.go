@@ -489,6 +489,9 @@ func (m *manager) loadBoot() ([]bootEntry, bool) {
 }
 
 func writeBoot(path string, entries []bootEntry) error {
+	if entries == nil {
+		entries = []bootEntry{}
+	}
 	b, err := json.Marshal(entries)
 	if err != nil {
 		return err

@@ -45,7 +45,7 @@ import (
 	"splitwire/internal/wgimport"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 const usage = `splitwire ` + version + ` - WireGuard with per-app split tunneling
 
@@ -62,8 +62,12 @@ Usage:
   splitwire stop <name>                 Stop an installed tunnel
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll and the split tunnel driver
-  splitwire manager install|uninstall   Set up or remove the service the notification area app uses
-  splitwire cleanup [--configs]         Uninstall everything; --configs also deletes your tunnel files
+  splitwire manager install [options]   Set up the service the notification area app uses:
+                                        --start-menu adds a Start menu shortcut, --boot turns on
+                                        reconnecting tunnels at boot, --import imports from the
+                                        WireGuard app; "manager uninstall" removes the service
+  splitwire cleanup [options]           Uninstall everything; --configs also deletes your tunnel
+                                        files, --keep-wireguardnt keeps the WireGuardNT driver
   splitwire version
 
 A <tunnel> is a name, for %APPDATA%\splitwire\<name>.conf, or a path to a .conf file.
@@ -83,6 +87,7 @@ func main() {
 		}
 	}
 	if len(args) > 0 && args[0] == tray.Command {
+		tray.Version = version
 		runTray(args[1:])
 		return
 	}
@@ -132,6 +137,31 @@ func runTray(args []string) {
 		windows.MessageBox(0, text, caption, windows.MB_OK|windows.MB_ICONERROR)
 		os.Exit(1)
 	}
+}
+
+// Flags of manager install and cleanup.
+var (
+	installFlags = []string{"--start-menu", "--boot", "--import"}
+	cleanupFlags = []string{"--configs", "--keep-wireguardnt"}
+)
+
+// onlyFlags reports whether every argument is one of allowed.
+func onlyFlags(args []string, allowed ...string) bool {
+	for _, a := range args {
+		if !hasFlag(allowed, a) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }
 
 func needArg(args []string, what string) (string, error) {
@@ -252,12 +282,13 @@ func run(args []string) error {
 			return err
 		}
 	case "manager":
-		if len(args) != 2 || (args[1] != "install" && args[1] != "uninstall") {
-			return errors.New("usage: splitwire manager install|uninstall")
+		if len(args) < 2 || (args[1] != "install" && args[1] != "uninstall") ||
+			(args[1] == "uninstall" && len(args) > 2) || !onlyFlags(args[2:], installFlags...) {
+			return errors.New("usage: splitwire manager install [" + strings.Join(installFlags, "] [") + "] | uninstall")
 		}
 	case "cleanup":
-		if len(args) > 2 || (len(args) == 2 && args[1] != "--configs") {
-			return errors.New("usage: splitwire cleanup [--configs]")
+		if !onlyFlags(args[1:], cleanupFlags...) {
+			return errors.New("usage: splitwire cleanup [" + strings.Join(cleanupFlags, "] [") + "]")
 		}
 	case "status", "bootstrap":
 	default:
@@ -292,13 +323,21 @@ func run(args []string) error {
 		return status(name)
 	case "manager":
 		if args[1] == "install" {
-			return manager.Install()
+			flags := args[2:]
+			err := manager.Install(manager.Options{
+				StartMenu: hasFlag(flags, "--start-menu"),
+				Boot:      hasFlag(flags, "--boot"),
+			})
+			if err != nil || !hasFlag(flags, "--import") {
+				return err
+			}
+			return importTunnels(nil)
 		}
 		return manager.Uninstall()
 	case "bootstrap":
 		return bootstrapAll()
 	case "cleanup":
-		return cleanup(len(args) > 1)
+		return cleanup(hasFlag(args[1:], "--configs"), !hasFlag(args[1:], "--keep-wireguardnt"))
 	}
 	return nil
 }
@@ -628,10 +667,10 @@ func bootstrapAll() error {
 
 // cleanup removes everything splitwire installed: its services, the split
 // tunnel driver, firewall objects, Program Files\splitwire, the sign-in
-// entry and temporary files. The WireGuardNT driver goes too unless the
-// WireGuard app, which shares it, is installed. With configs, the tunnel
-// configurations in %APPDATA%\splitwire go as well.
-func cleanup(configs bool) error {
+// entry and temporary files. With wireguardNT, the WireGuardNT driver goes
+// too unless the WireGuard app, which shares it, is installed. With
+// configs, the tunnel configurations in %APPDATA%\splitwire go as well.
+func cleanup(configs, wireguardNT bool) error {
 	installed, err := service.List()
 	if err != nil {
 		return err
@@ -663,7 +702,9 @@ func cleanup(configs bool) error {
 	if err := firewall.RemoveSublayers(); err != nil {
 		log.Printf("Warning: remove firewall sublayers: %v", err)
 	}
-	removeWireGuardNT()
+	if wireguardNT {
+		removeWireGuardNT()
+	}
 
 	root, err := bootstrap.Root()
 	if err != nil {

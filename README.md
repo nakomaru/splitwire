@@ -87,14 +87,23 @@ Show manager log, Uninstall splitwire..., Quit
 - **Uninstall splitwire...** removes everything, as `splitwire cleanup`
   below, and asks whether to delete your tunnel configurations too.
 
-The first run asks to set splitwire up. Setup copies the executable to
-`%ProgramFiles%\splitwire\bin`, installs the manager service, adds a
-splitwire shortcut to the Start menu for every user, turns on start at
-sign-in and switches to the installed copy. It then offers to delete the
-setup file; the installed copy deletes it once the setup process has
-exited, and only when it is identical to the installed executable.
-Double-clicking a different `splitwire.exe` later offers to update the
-installed one, then to delete that file the same way; an identical copy
+The first run opens one setup window with a checkbox and a description
+for each choice, and an Install button that asks for administrator rights
+once:
+
+- **Add splitwire to the Start menu** (on): a shortcut for every user.
+- **Start splitwire at sign-in** (on).
+- **Reconnect tunnels at boot** (off): the menu changes it later.
+- **Import tunnels from the WireGuard app**, when that app is installed (on
+  while `%APPDATA%\splitwire` holds no tunnels).
+- **Delete this setup file afterward** (on), when run from outside Program
+  Files: the installed copy deletes the file once the setup process has
+  exited, and only when it is identical to the installed executable.
+
+Setup copies the executable to `%ProgramFiles%\splitwire\bin`, installs the
+manager service and switches to the installed copy. Double-clicking a
+different `splitwire.exe` later opens an update window that shows both
+versions, with the same option to delete that file; an identical copy
 opens the installed app.
 
 The manager service runs as SYSTEM and does the privileged work; the app
@@ -152,9 +161,9 @@ tunnel, and stop while no VPN runs.
 | `uninstall <name>` | Stop and delete that service and its stored configuration |
 | `start <name>`, `stop <name>` | Control an installed tunnel |
 | `status [name]` | Configured and installed tunnels, peer handshakes and transfer, driver state |
-| `manager install` | Install or update the manager service the app uses (`manager uninstall` removes it) |
+| `manager install [--start-menu] [--boot] [--import]` | Install or update the manager service the app uses, optionally adding the Start menu shortcut, turning on reconnecting at boot and importing from the WireGuard app (`manager uninstall` removes the service) |
 | `bootstrap` | Install the components without bringing a tunnel up |
-| `cleanup [--configs]` | Uninstall everything (see below); `--configs` also deletes `%APPDATA%\splitwire` |
+| `cleanup [--configs] [--keep-wireguardnt]` | Uninstall everything (see below); `--configs` also deletes `%APPDATA%\splitwire`, `--keep-wireguardnt` keeps the WireGuardNT driver |
 
 `install` expands `%VARIABLES%` and globs in `App` lines as the installing
 user, because the service runs as SYSTEM with a different profile.
@@ -192,18 +201,21 @@ Everything lives in `%ProgramFiles%\splitwire`:
 
 ## Uninstalling
 
-`splitwire cleanup`, or **Uninstall splitwire...** in the menu, removes:
+`splitwire cleanup`, or **Uninstall splitwire...** in the menu, removes the
+following. The menu's uninstall window has checkboxes for deleting the
+configurations (off) and the WireGuardNT driver (on, and unavailable while
+the WireGuard app is installed).
 
 - the manager service, every `splitwire$<name>` tunnel service and a
   leftover `splitwire-wg-import` service
 - the `mullvad-split-tunnel` driver service, after resetting the driver
 - the splitwire firewall provider and sublayers
 - the WireGuardNT driver, unless the WireGuard app is installed and uses it
+  or `--keep-wireguardnt` is given
 - `%ProgramFiles%\splitwire`; files still in use, such as the running app,
   are deleted at the next restart
 - the Start menu shortcut, the sign-in entry and the app's files in `%TEMP%`
-- with `--configs`, or when the menu's question is answered Yes,
-  `%APPDATA%\splitwire`
+- with `--configs`, `%APPDATA%\splitwire`
 
 Windows keeps a network profile entry for every network adapter it has
 seen, including the tunnels' adapters, under
