@@ -34,6 +34,9 @@ const (
 
 const manifestLimit = 64 << 10
 
+// ErrNoRelease reports that no signed release is published.
+var ErrNoRelease = errors.New("no signed release is published yet")
+
 // publicKeys are the base64 Ed25519 public keys of the release keys. A
 // manifest signed by any one of them counts.
 var publicKeys = []string{
@@ -58,6 +61,9 @@ type File struct {
 func Latest(ctx context.Context) (*Manifest, error) {
 	base := releasesURL + "/latest/download/"
 	manifest, err := fetch.Bytes(ctx, base+ManifestFile, manifestLimit)
+	if errors.Is(err, fetch.ErrNotFound) {
+		return nil, ErrNoRelease
+	}
 	if err != nil {
 		return nil, err
 	}

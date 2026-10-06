@@ -2,6 +2,7 @@ package tray
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -52,7 +53,12 @@ func (a *app) updateApp() {
 	a.mu.Unlock()
 	if m == nil {
 		var err error
-		if m, err = a.checkUpdate(); err != nil {
+		m, err = a.checkUpdate()
+		if errors.Is(err, update.ErrNoRelease) {
+			infoBox("SplitWire %s is installed; %s.", Version, err)
+			return
+		}
+		if err != nil {
 			errorBox("Could not check for updates:\n\n%v", err)
 			return
 		}

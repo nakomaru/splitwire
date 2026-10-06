@@ -3,6 +3,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 )
 
 var client = &http.Client{Timeout: 5 * time.Minute}
+
+// ErrNotFound is the error of a download the server has no file for.
+var ErrNotFound = errors.New("not found")
 
 // Bytes downloads url, refusing bodies larger than limit.
 func Bytes(ctx context.Context, url string, limit int64) ([]byte, error) {
@@ -24,6 +28,9 @@ func Bytes(ctx context.Context, url string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("GET %s: %w", url, ErrNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}

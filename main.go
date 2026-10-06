@@ -768,6 +768,10 @@ func selfUpdate(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	m, err := update.Latest(ctx)
+	if errors.Is(err, update.ErrNoRelease) {
+		log.Printf("SplitWire %s is installed; %v", version, err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
