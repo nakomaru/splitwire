@@ -305,6 +305,9 @@ func (a *app) uninstall() {
 		heading: "Your files",
 		label:   "Delete my tunnel configurations",
 		detail:  `%APPDATA%\splitwire, including your private keys.`,
+	}, option{
+		label:  "Delete SplitWire's settings",
+		detail: "The Overview's protection settings and Always direct list. They stay while SplitWire stays for other users.",
 	})
 	if wgimport.AppInstalled() {
 		opts = append(opts, option{
@@ -328,7 +331,7 @@ func (a *app) uninstall() {
 		return
 	}
 	keep := others > 0 && states[0]
-	configs, wireguardNT := states[len(states)-2], states[len(states)-1]
+	configs, deleteSettings, wireguardNT := states[len(states)-3], states[len(states)-2], states[len(states)-1]
 	if keep {
 		sid, err := ownSID()
 		if err != nil {
@@ -349,6 +352,9 @@ func (a *app) uninstall() {
 		args := []string{"cleanup"}
 		if configs {
 			args = append(args, "--configs")
+		}
+		if deleteSettings {
+			args = append(args, "--settings")
 		}
 		if !wireguardNT {
 			args = append(args, "--keep-wireguardnt")

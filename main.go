@@ -38,6 +38,7 @@ import (
 	"splitwire/internal/netcfg"
 	"splitwire/internal/proxy"
 	"splitwire/internal/qr"
+	"splitwire/internal/settings"
 	"splitwire/internal/shortcut"
 	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
@@ -70,6 +71,8 @@ Usage:
   splitwire direct [add|remove <entry>...]
                                         List, add or remove Always direct address ranges,
                                         addresses and host names, which no tunnel carries
+  splitwire settings [<name> on|off]... List the settings for every tunnel, or turn killswitch,
+                                        allowlan or strictdns on or off
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire update                      Install the newest signed release over the installed copy
   splitwire manager install [options]   Set up the service the notification area app uses:
@@ -79,14 +82,16 @@ Usage:
                                         imports from the WireGuard app, --user=SID allows that
                                         user instead of the current one; "manager leave" removes
                                         a user again, "manager uninstall" removes the service
-  splitwire cleanup [options]           Uninstall everything; --configs also deletes your tunnel
-                                        files, --keep-wireguardnt keeps the WireGuardNT driver
+  splitwire cleanup [options]           Uninstall everything but your tunnel files and the
+                                        settings; --configs also deletes your tunnel files,
+                                        --settings the settings, and --keep-wireguardnt keeps
+                                        the WireGuardNT driver
   splitwire version
 
 A <tunnel> is a name, for %APPDATA%\splitwire\<name>.conf, or a path to a .conf file.
 Commands that change the system ask for administrator rights, and fail from a console
-without a window, where no one sees the prompt. connect, disconnect, direct and status
-go through the SplitWire service and need none.
+without a window, where no one sees the prompt. connect, disconnect, direct, settings
+and status go through the SplitWire service and need none.
 `
 
 func main() {
@@ -156,7 +161,7 @@ func runTray(args []string) {
 // Flags of manager install and cleanup.
 var (
 	installFlags = []string{"--boot", "--no-boot", "--wireguard-driver", "--split-tunnel-driver", "--import", "--user="}
-	cleanupFlags = []string{"--configs", "--keep-wireguardnt"}
+	cleanupFlags = []string{"--configs", "--settings", "--keep-wireguardnt"}
 )
 
 // onlyFlags reports whether every argument is one of allowed. An allowed
@@ -313,6 +318,8 @@ func run(args []string) error {
 		return apps(filter)
 	case "direct":
 		return direct(args[1:])
+	case "settings":
+		return settingsCmd(args[1:])
 	case "connect":
 		return connect(args[1:])
 	case "disconnect":
@@ -415,7 +422,7 @@ func run(args []string) error {
 	case "update":
 		return selfUpdate(args)
 	case "cleanup":
-		return cleanup(hasFlag(args[1:], "--configs"), !hasFlag(args[1:], "--keep-wireguardnt"))
+		return cleanup(hasFlag(args[1:], "--configs"), !hasFlag(args[1:], "--settings"), !hasFlag(args[1:], "--keep-wireguardnt"))
 	}
 	return nil
 }
@@ -948,10 +955,12 @@ func ensureSplitDriver(ctx context.Context) error {
 
 // cleanup removes everything splitwire installed: its service, the split
 // tunnel driver, firewall objects, Program Files\splitwire, the sign-in
-// entry and temporary files. With wireguardNT, the WireGuardNT driver goes
-// too unless the WireGuard app, which shares it, is installed. With
-// configs, the tunnel configurations in %APPDATA%\splitwire go as well.
-func cleanup(configs, wireguardNT bool) error {
+// entry and temporary files. The machine-wide settings stay for a later
+// install unless keepSettings is false. With wireguardNT, the WireGuardNT
+// driver goes too unless the WireGuard app, which shares it, is installed.
+// With configs, the tunnel configurations in %APPDATA%\splitwire go as
+// well.
+func cleanup(configs, keepSettings, wireguardNT bool) error {
 	if err := manager.Uninstall(); err != nil {
 		return err
 	}
@@ -982,7 +991,15 @@ func cleanup(configs, wireguardNT bool) error {
 	if err != nil {
 		return err
 	}
-	pending, err := bootstrap.RemoveRoot()
+	keep := ""
+	if keepSettings {
+		if p, err := settings.Path(); err == nil {
+			if _, err := os.Stat(p); err == nil {
+				keep = p
+			}
+		}
+	}
+	pending, err := bootstrap.RemoveRoot(keep)
 	if err != nil {
 		return err
 	}
@@ -990,6 +1007,9 @@ func cleanup(configs, wireguardNT bool) error {
 		log.Printf("Removed %s except %d files and folders in use, which go at the next restart", root, pending)
 	} else {
 		log.Printf("Removed %s", root)
+	}
+	if keep != "" {
+		log.Printf("Kept the settings in %s", keep)
 	}
 
 	if lnk, err := shortcut.StartMenu(tray.StartMenuName); err == nil && os.Remove(lnk) == nil {
@@ -1040,4 +1060,65 @@ func removeWireGuardNT() {
 		return
 	}
 	log.Printf("Removed the WireGuardNT driver")
+}
+
+// switches are the machine-wide settings that turn on and off, by the
+// names "splitwire settings" takes.
+var switches = []struct {
+	name, label string
+	field       func(*settings.Settings) *bool
+}{
+	{"killswitch", "Kill switch", func(s *settings.Settings) *bool { return &s.KillSwitch }},
+	{"allowlan", "Allow the local network", func(s *settings.Settings) *bool { return &s.AllowLAN }},
+	{"strictdns", "Use only the tunnels' DNS servers", func(s *settings.Settings) *bool { return &s.StrictDNS }},
+}
+
+// settingsCmd lists the machine-wide settings, or changes them through the
+// service from pairs of a name and on or off.
+func settingsCmd(args []string) error {
+	const usage = "usage: splitwire settings [killswitch|allowlan|strictdns on|off]..."
+	if len(args)%2 != 0 {
+		return errors.New(usage)
+	}
+	if !manager.Installed() {
+		return errors.New("the SplitWire service is not installed (splitwire manager install)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	rep, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpStatus})
+	if err != nil {
+		return err
+	}
+	s := rep.Status.Settings
+	for i := 0; i < len(args); i += 2 {
+		on, ok := map[string]bool{"on": true, "off": false}[strings.ToLower(args[i+1])]
+		found := false
+		for _, sw := range switches {
+			if strings.EqualFold(args[i], sw.name) {
+				*sw.field(&s), found = on, true
+			}
+		}
+		if !ok || !found {
+			return errors.New(usage)
+		}
+	}
+	if len(args) > 0 {
+		if _, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpSettings, Settings: &s}); err != nil {
+			return err
+		}
+	}
+	state := map[bool]string{true: "on", false: "off"}
+	for _, sw := range switches {
+		note := ""
+		if sw.name == "allowlan" && !s.KillSwitch {
+			note = "; applies while the kill switch is on"
+		}
+		fmt.Printf("%-34s %-3s  (%s%s)\n", sw.label, state[*sw.field(&s)], sw.name, note)
+	}
+	direct := "nothing"
+	if len(s.Direct) > 0 {
+		direct = strings.Join(s.Direct, ", ")
+	}
+	fmt.Printf("%-34s %s  (splitwire direct)\n", "Always direct", direct)
+	return nil
 }

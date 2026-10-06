@@ -98,13 +98,15 @@ splitwire connect home           # connect a tunnel in the service, as the app d
 splitwire connect warp --proxy   # ... as a proxy
 splitwire disconnect warp        # disconnect it
 splitwire status                 # tunnels, peers and the split tunnel driver
+splitwire settings               # the Overview's settings
+splitwire settings allowlan on   # change one
 splitwire proxy warp             # run a tunnel as a proxy until Ctrl+C
 splitwire help                   # every command
 ```
 
-`connect`, `disconnect`, `direct` and `status` go through the SplitWire
-service and need no administrator rights, so scripts and agents can use
-them. Commands that change the system ask for administrator rights; from a
+`connect`, `disconnect`, `direct`, `settings` and `status` go through the
+SplitWire service and need no administrator rights, so scripts and agents
+can use them. Commands that change the system ask for administrator rights; from a
 console without a window, such as a script runner's, where no one sees the
 prompt, they fail at once and say so.
 
@@ -129,7 +131,9 @@ Running tunnels disconnect briefly during an update and reconnect.
 ## Uninstalling
 
 **Uninstall SplitWire...** in the menu, or `splitwire cleanup`, removes
-everything except your tunnel files, unless you choose to delete them too.
+everything except your tunnel files and the Overview's settings, which a
+later install picks up again. Either can go too: in the menu, or with
+`--configs` and `--settings`.
 
 ## Building and releasing
 

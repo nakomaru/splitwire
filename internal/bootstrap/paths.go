@@ -156,32 +156,50 @@ func ReplaceExe(b []byte) error {
 	return replaceFile(dst, b)
 }
 
-// RemoveRoot deletes the install root. Files in use, such as the running
+// RemoveRoot deletes the install root, except the file keep and the
+// folders holding it when keep is set. Files in use, such as the running
 // tray app, are scheduled for deletion at the next restart along with
 // their folders; it reports how many.
-func RemoveRoot() (pending int, err error) {
+func RemoveRoot(keep string) (pending int, err error) {
 	root, err := Root()
 	if err != nil {
 		return 0, err
 	}
-	if os.RemoveAll(root) == nil {
+	return removeTree(root, keep)
+}
+
+// removeTree deletes root as RemoveRoot does.
+func removeTree(root, keep string) (pending int, err error) {
+	if keep == "" && os.RemoveAll(root) == nil {
 		return 0, nil
 	}
-	var left []string
+	var paths []string
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err == nil {
-			left = append(left, path)
+			paths = append(paths, path)
 		}
 		return nil
 	})
 	// Children before their folders.
-	for i := len(left) - 1; i >= 0; i-- {
-		if err := deleteAtRestart(left[i]); err != nil {
-			return pending, fmt.Errorf("schedule %s for deletion: %w", left[i], err)
+	for i := len(paths) - 1; i >= 0; i-- {
+		p := paths[i]
+		if keep != "" && (strings.EqualFold(p, keep) || hasPathPrefix(keep, p)) {
+			continue
+		}
+		if err := os.Remove(p); err == nil || os.IsNotExist(err) {
+			continue
+		}
+		if err := deleteAtRestart(p); err != nil {
+			return pending, fmt.Errorf("schedule %s for deletion: %w", p, err)
 		}
 		pending++
 	}
 	return pending, nil
+}
+
+// hasPathPrefix reports whether path lies inside the folder dir.
+func hasPathPrefix(path, dir string) bool {
+	return len(path) > len(dir) && strings.EqualFold(path[:len(dir)], dir) && os.IsPathSeparator(path[len(dir)])
 }
 
 func deleteAtRestart(path string) error {

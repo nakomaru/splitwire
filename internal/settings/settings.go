@@ -35,7 +35,8 @@ type Settings struct {
 	Direct []string `json:",omitempty"`
 }
 
-func path() (string, error) {
+// Path is the settings file.
+func Path() (string, error) {
 	dir, err := bootstrap.ConfigsDir()
 	if err != nil {
 		return "", err
@@ -51,7 +52,7 @@ func Defaults() Settings {
 // Load reads the settings; missing settings are the defaults.
 func Load() (Settings, error) {
 	s := Defaults()
-	p, err := path()
+	p, err := Path()
 	if err != nil {
 		return s, err
 	}
@@ -67,7 +68,7 @@ func Load() (Settings, error) {
 
 // Save writes the settings.
 func Save(s Settings) error {
-	p, err := path()
+	p, err := Path()
 	if err != nil {
 		return err
 	}
