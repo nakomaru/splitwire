@@ -16,6 +16,7 @@ import (
 	"splitwire/internal/config"
 	"splitwire/internal/ipc"
 	"splitwire/internal/svcwait"
+	"splitwire/internal/update"
 	"splitwire/internal/userconf"
 )
 
@@ -55,6 +56,9 @@ type app struct {
 	// openAtStart opens the window once the app is ready.
 	openAtStart bool
 
+	// latest is a release newer than this copy, or nil.
+	latest *update.Manifest
+
 	setupOnce sync.Once
 	// next starts with nextArgs once the menu loop ends.
 	next     string
@@ -68,6 +72,7 @@ type app struct {
 	downAllMI   *systray.MenuItem
 	bootMI      *systray.MenuItem
 	loginMI     *systray.MenuItem
+	updateMI    *systray.MenuItem
 	setupMI     *systray.MenuItem
 	uninstallMI *systray.MenuItem
 }
@@ -96,6 +101,7 @@ func (a *app) ready() {
 	a.rebuild()
 	go a.watchFolder()
 	go a.watchManager()
+	go a.watchUpdates()
 	// Before setup the install window comes first.
 	if a.openAtStart && svcwait.Exists(ipc.ServiceName) {
 		go a.openWindow()

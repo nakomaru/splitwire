@@ -1,4 +1,4 @@
-// Command splitwire runs WireGuard tunnels on Windows with per-app split
+// Command splitwire is a VPN client for Windows with per-app split
 // tunneling. Started without arguments from Explorer, it is the
 // notification area app; from a shell, it is the command line.
 package main
@@ -41,14 +41,15 @@ import (
 	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
 	"splitwire/internal/tray"
+	"splitwire/internal/update"
 	"splitwire/internal/userconf"
 	"splitwire/internal/warp"
 	"splitwire/internal/wgimport"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
-const usage = `SplitWire ` + version + ` - WireGuard with per-app split tunneling
+const usage = `SplitWire ` + version + ` - a VPN client with per-app split tunneling
 
 Usage:
   splitwire                             Open the app and its window (also by double-clicking)
@@ -64,6 +65,7 @@ Usage:
   splitwire stop <name>                 Stop an installed tunnel
   splitwire status [name]               Show tunnels, the driver and peer statistics
   splitwire bootstrap                   Install wireguard.dll, the WireGuardNT and split tunnel drivers
+  splitwire update                      Install the newest signed release over the installed copy
   splitwire manager install [options]   Set up the service the notification area app uses:
                                         --boot or --no-boot turns reconnecting tunnels at boot on
                                         or off, --wireguard-driver and
@@ -346,6 +348,18 @@ func run(args []string) error {
 		if !onlyFlags(args[1:], cleanupFlags...) {
 			return errors.New("usage: splitwire cleanup [" + strings.Join(cleanupFlags, "] [") + "]")
 		}
+	case "update":
+		if !onlyFlags(args[1:], "--user=") {
+			return errors.New("usage: splitwire update [--user=SID]")
+		}
+		// The user is recorded before elevating, which can switch accounts.
+		if flagValue(args[1:], "--user=") == "" {
+			sid, err := manager.CurrentUser()
+			if err != nil {
+				return err
+			}
+			args = append(args, "--user="+sid)
+		}
 	case "status", "bootstrap":
 	default:
 		return fmt.Errorf("unknown command %q; run splitwire help", args[0])
@@ -420,6 +434,8 @@ func run(args []string) error {
 		return manager.Uninstall()
 	case "bootstrap":
 		return bootstrapAll()
+	case "update":
+		return selfUpdate(args)
 	case "cleanup":
 		return cleanup(hasFlag(args[1:], "--configs"), !hasFlag(args[1:], "--keep-wireguardnt"))
 	}
@@ -746,6 +762,58 @@ func stateName(s svc.State) string {
 		return "running"
 	}
 	return fmt.Sprintf("state %d", s)
+}
+
+// selfUpdate installs the newest signed release over the installed copy,
+// then runs the new executable's manager install, which restarts the
+// manager service with it. The installed copy does the work, so the version
+// it compares against is the installed one.
+func selfUpdate(args []string) error {
+	if !manager.Installed() {
+		return errors.New("SplitWire is not installed; `splitwire manager install` installs this copy")
+	}
+	installed, err := bootstrap.ExePath()
+	if err != nil {
+		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(filepath.Clean(self), filepath.Clean(installed)) {
+		return runInstalled(installed, args...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	m, err := update.Latest(ctx)
+	if err != nil {
+		return err
+	}
+	if !update.Newer(m.Version, version) {
+		log.Printf("SplitWire %s is the newest version", version)
+		return nil
+	}
+	log.Printf("Downloading SplitWire %s", m.Version)
+	exe, err := m.Download(ctx)
+	if err != nil {
+		return err
+	}
+	if err := bootstrap.ReplaceExe(exe); err != nil {
+		return err
+	}
+	log.Printf("Installed SplitWire %s; restarting the manager service with it", m.Version)
+	return runInstalled(installed, "manager", "install", "--wireguard-driver", "--split-tunnel-driver",
+		"--user="+flagValue(args[1:], "--user="))
+}
+
+// runInstalled runs the installed executable with args in this console.
+func runInstalled(exe string, args ...string) error {
+	cmd := exec.Command(exe, args...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w", exe, strings.Join(args, " "), err)
+	}
+	return nil
 }
 
 // bootstrapAll installs wireguard.dll, the WireGuardNT driver and the

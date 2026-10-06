@@ -131,13 +131,7 @@ func deleteSetup(path string, pid uint32, installed string) {
 	}
 }
 
-func installedExe() (string, error) {
-	bin, err := bootstrap.BinDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(bin, "splitwire.exe"), nil
-}
+func installedExe() (string, error) { return bootstrap.ExePath() }
 
 func samePath(a, b string) bool {
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))

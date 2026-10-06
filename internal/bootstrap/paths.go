@@ -116,6 +116,15 @@ func writeVerified(path string, b []byte, wantSHA256 string) error {
 	return nil
 }
 
+// ExePath is the installed splitwire.exe, which the services run.
+func ExePath() (string, error) {
+	bin, err := BinDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(bin, "splitwire.exe"), nil
+}
+
 // InstallExe copies the running executable into the install root, so the
 // service never runs from a user-writable location. A running copy is moved
 // aside, which Windows permits for executables in use.
@@ -124,11 +133,10 @@ func InstallExe() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	bin, err := BinDir()
+	dst, err := ExePath()
 	if err != nil {
 		return "", err
 	}
-	dst := filepath.Join(bin, "splitwire.exe")
 	if strings.EqualFold(filepath.Clean(self), dst) {
 		return dst, nil
 	}
@@ -137,6 +145,15 @@ func InstallExe() (string, error) {
 		return "", err
 	}
 	return dst, replaceFile(dst, b)
+}
+
+// ReplaceExe makes b the installed executable, moving a running copy aside.
+func ReplaceExe(b []byte) error {
+	dst, err := ExePath()
+	if err != nil {
+		return err
+	}
+	return replaceFile(dst, b)
 }
 
 // legacyTrayExe is the separate tray executable of earlier installs.
@@ -192,17 +209,24 @@ func deleteAtRestart(path string) error {
 }
 
 // replaceFile writes b to dst unless dst already holds it, moving a running
-// copy aside first.
+// copy aside. The new file is written in full before dst moves, so a failed
+// write leaves dst as it was.
 func replaceFile(dst string, b []byte) error {
 	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) {
 		return nil
+	}
+	tmp := dst + ".new"
+	if err := os.WriteFile(tmp, b, 0o755); err != nil {
+		os.Remove(tmp)
+		return err
 	}
 	if _, err := os.Stat(dst); err == nil {
 		aside := dst + ".old"
 		os.Remove(aside)
 		if err := os.Rename(dst, aside); err != nil {
+			os.Remove(tmp)
 			return fmt.Errorf("move aside %s: %w", dst, err)
 		}
 	}
-	return os.WriteFile(dst, b, 0o755)
+	return os.Rename(tmp, dst)
 }

@@ -207,7 +207,7 @@ func setStartMenu(on bool) error {
 	if err != nil {
 		return err
 	}
-	return shortcut.Create(lnk, installed, Command, "WireGuard with per-app split tunneling")
+	return shortcut.Create(lnk, installed, Command, "VPN client with per-app split tunneling")
 }
 
 // handOver runs the installed copy instead of this one, offering to update
