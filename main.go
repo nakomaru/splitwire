@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"os/exec"
@@ -22,7 +23,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/svc"
 	"golang.zx2c4.com/wireguard/windows/driver"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
@@ -37,7 +37,7 @@ import (
 	"splitwire/internal/manager"
 	"splitwire/internal/netcfg"
 	"splitwire/internal/proxy"
-	"splitwire/internal/service"
+	"splitwire/internal/qr"
 	"splitwire/internal/shortcut"
 	"splitwire/internal/stats"
 	"splitwire/internal/stdriver"
@@ -55,20 +55,22 @@ const usage = `SplitWire ` + version + ` - a VPN client with per-app split tunne
 Usage:
   splitwire                             Open the app and its window (also by double-clicking)
   splitwire import [--force] [name...]  Copy tunnels from the WireGuard app
-  splitwire up <tunnel>                 Run a tunnel in this console until Ctrl+C
+  splitwire connect <tunnel> [--split|--vpn|--proxy]
+                                        Connect a tunnel in the SplitWire service, as the app does:
+                                        as the Split VPN when its Mode picks apps, as a VPN
+                                        otherwise, or the way a flag picks
+  splitwire disconnect <name>|--all     Disconnect a tunnel the service runs, or every one
   splitwire proxy <tunnel>              Run a tunnel as a local proxy in this console until Ctrl+C
   splitwire warp [name]                 Register a free Cloudflare WARP device as a new tunnel
+  splitwire qr <image>|--clipboard|--screen [name]
+                                        Import a tunnel from a QR code in an image file, on the
+                                        clipboard, such as a Win+Shift+S snip, or on the screen
   splitwire check <tunnel>              Validate a configuration and show its effect
   splitwire apps [filter]               List running programs with their paths
   splitwire direct [add|remove <entry>...]
                                         List, add or remove Always direct address ranges,
                                         addresses and host names, which no tunnel carries
-  splitwire install <tunnel>            Install a tunnel as a service that starts at boot
-  splitwire uninstall <name>            Stop and remove an installed tunnel
-  splitwire start <name>                Start an installed tunnel
-  splitwire stop <name>                 Stop an installed tunnel
   splitwire status [name]               Show tunnels, the driver and peer statistics
-  splitwire bootstrap                   Install wireguard.dll, the WireGuardNT and split tunnel drivers
   splitwire update                      Install the newest signed release over the installed copy
   splitwire manager install [options]   Set up the service the notification area app uses:
                                         --boot or --no-boot turns reconnecting tunnels at boot on
@@ -82,8 +84,9 @@ Usage:
   splitwire version
 
 A <tunnel> is a name, for %APPDATA%\splitwire\<name>.conf, or a path to a .conf file.
-"up" imports a named tunnel from the WireGuard app when the file does not exist yet.
-Commands that change the system ask for administrator rights.
+Commands that change the system ask for administrator rights, and fail from a console
+without a window, where no one sees the prompt. connect, disconnect, direct and status
+go through the SplitWire service and need none.
 `
 
 func main() {
@@ -211,25 +214,17 @@ func needArg(args []string, what string) (string, error) {
 }
 
 // requireAdmin relaunches the command elevated when needed. It reports true
-// when the caller should stop because an elevated copy took over.
+// when the caller should stop because an elevated copy took over. From a
+// console without a window, where no one watches for the prompt, it fails.
 func requireAdmin(args []string) (bool, error) {
 	if elevate.IsElevated() {
 		return false, nil
 	}
+	if console.Hidden() {
+		return false, fmt.Errorf("splitwire %s needs administrator rights; run it from an administrator console", args[0])
+	}
 	log.Printf("Requesting administrator rights; the command continues in a new window")
 	return true, elevate.Relaunch(args, true)
-}
-
-// absArg resolves a tunnel argument to its configuration path, so an
-// elevated relaunch finds the same file.
-func absArg(args []string) []string {
-	out := append([]string(nil), args...)
-	if len(out) == 2 && userconf.IsPath(out[1]) {
-		if p, err := userconf.Resolve(out[1]); err == nil {
-			out[1] = p
-		}
-	}
-	return out
 }
 
 // existingConf resolves a tunnel argument to a configuration file that exists.
@@ -252,18 +247,8 @@ func run(args []string) error {
 		fmt.Print(usage)
 		return nil
 	}
-	if args[0] == service.RunCommand {
-		if len(args) != 2 {
-			return errors.New("service-run needs a configuration path")
-		}
-		return service.Run(args[1])
-	}
 	if args[0] == manager.RunCommand {
-		legacyUser := ""
-		if len(args) > 1 {
-			legacyUser = args[1]
-		}
-		return manager.Run(legacyUser)
+		return manager.Run()
 	}
 	if args[0] == wgimport.HelperCommand {
 		if len(args) < 3 {
@@ -301,6 +286,15 @@ func run(args []string) error {
 			name = args[1]
 		}
 		return createWARP(name)
+	case "qr":
+		if len(args) < 2 || len(args) > 3 {
+			return errors.New("usage: splitwire qr <image>|--clipboard|--screen [name]")
+		}
+		name := "QR"
+		if len(args) == 3 {
+			name = args[2]
+		}
+		return importQR(args[1], name)
 	case "proxy":
 		arg, err := needArg(args, "<tunnel>")
 		if err != nil {
@@ -319,19 +313,20 @@ func run(args []string) error {
 		return apps(filter)
 	case "direct":
 		return direct(args[1:])
+	case "connect":
+		return connect(args[1:])
+	case "disconnect":
+		return disconnect(args[1:])
+	case "status":
+		name := ""
+		if len(args) > 1 {
+			name = args[1]
+		}
+		return status(name)
 	}
 
 	switch args[0] {
-	case "up", "install":
-		if _, err := needArg(args, "<tunnel>"); err != nil {
-			return err
-		}
-		args = absArg(args)
 	case "import":
-	case "uninstall", "start", "stop":
-		if _, err := needArg(args, "<name>"); err != nil {
-			return err
-		}
 	case "manager":
 		ok := len(args) >= 2
 		if ok {
@@ -366,7 +361,6 @@ func run(args []string) error {
 			}
 			args = append(args, "--user="+sid)
 		}
-	case "status", "bootstrap":
 	default:
 		return fmt.Errorf("unknown command %q; run splitwire help", args[0])
 	}
@@ -377,26 +371,6 @@ func run(args []string) error {
 	switch args[0] {
 	case "import":
 		return importTunnels(args[1:])
-	case "up":
-		return up(args[1])
-	case "install":
-		path, err := existingConf(args[1])
-		if err != nil {
-			return err
-		}
-		return service.Install(path)
-	case "uninstall":
-		return service.Uninstall(args[1])
-	case "start":
-		return service.Start(args[1])
-	case "stop":
-		return service.Stop(args[1])
-	case "status":
-		name := ""
-		if len(args) > 1 {
-			name = args[1]
-		}
-		return status(name)
 	case "manager":
 		if args[1] == "install" {
 			flags := args[2:]
@@ -438,8 +412,6 @@ func run(args []string) error {
 			return manager.Leave(user)
 		}
 		return manager.Uninstall()
-	case "bootstrap":
-		return bootstrapAll()
 	case "update":
 		return selfUpdate(args)
 	case "cleanup":
@@ -478,27 +450,6 @@ func importTunnels(args []string) error {
 	return nil
 }
 
-func up(arg string) error {
-	path, err := userconf.Resolve(arg)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(path); os.IsNotExist(err) && !userconf.IsPath(arg) {
-		log.Printf("%s does not exist; importing %s from the WireGuard app", path, arg)
-		if _, err := wgimport.Import([]string{arg}, false); err != nil {
-			return err
-		}
-	}
-	c, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	log.Printf("Starting tunnel %s; press Ctrl+C to stop", c.WG.Name)
-	return engine.Run(ctx, c)
-}
-
 // createWARP registers a Cloudflare WARP device and saves it as a tunnel
 // named name, or name-2 and so on when that is taken.
 func createWARP(name string) error {
@@ -518,6 +469,35 @@ func createWARP(name string) error {
 	return nil
 }
 
+// importQR saves the tunnel in the QR code of an image file, the clipboard
+// or the screen.
+func importQR(from, name string) error {
+	var img image.Image
+	var err error
+	switch from {
+	case "--clipboard":
+		img, err = qr.Clipboard()
+	case "--screen":
+		img, err = qr.Screen()
+	default:
+		img, err = qr.File(from)
+	}
+	if err != nil {
+		return err
+	}
+	text, err := qr.Decode(img)
+	if err != nil {
+		return err
+	}
+	saved, err := userconf.ImportText(name, text)
+	if err != nil {
+		return fmt.Errorf("the QR code holds no WireGuard tunnel: %w", err)
+	}
+	dir, _ := userconf.Dir()
+	log.Printf("Created %s in %s", saved, dir)
+	return nil
+}
+
 func runProxy(path string) error {
 	if _, err := userconf.EnsureProxy(path); err != nil {
 		return err
@@ -526,6 +506,7 @@ func runProxy(path string) error {
 	if err != nil {
 		return err
 	}
+	warnScripts(c)
 	p, err := proxy.Start(c)
 	if err != nil {
 		return err
@@ -539,11 +520,19 @@ func runProxy(path string) error {
 	return nil
 }
 
+// warnScripts notes the script settings of c, which SplitWire never runs.
+func warnScripts(c *config.Config) {
+	if scripts := c.Scripts(); len(scripts) > 0 {
+		log.Printf("Warning: %s sets %s, which SplitWire never runs", c.WG.Name, strings.Join(scripts, ", "))
+	}
+}
+
 func check(path string) error {
 	c, err := config.Load(path)
 	if err != nil {
 		return err
 	}
+	warnScripts(c)
 	fmt.Printf("Tunnel      %s\n", c.WG.Name)
 	fmt.Printf("Mode        %s\n", c.Mode)
 	for _, p := range c.WG.Peers {
@@ -645,7 +634,11 @@ func apps(filter string) error {
 	return nil
 }
 
+// status shows the tunnel files, what the SplitWire service runs, the
+// installed tunnel services and the split tunnel driver. Adapter details of
+// tunnels outside the service need an administrator console.
 func status(name string) error {
+	elevated := elevate.IsElevated()
 	if dir, err := userconf.Dir(); err == nil {
 		names, err := userconf.Names()
 		if err != nil {
@@ -657,6 +650,7 @@ func status(name string) error {
 			fmt.Printf("Tunnels in %s: %s\n", dir, strings.Join(names, ", "))
 		}
 	}
+	var st *ipc.Status
 	if manager.Installed() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		rep, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpStatus})
@@ -664,21 +658,14 @@ func status(name string) error {
 		if err != nil {
 			fmt.Printf("Manager: %v\n", err)
 		} else {
-			st := rep.Status
+			st = rep.Status
 			boot := ""
 			if st.Boot {
 				boot = "; running tunnels come back when Windows starts"
 			}
 			fmt.Printf("Manager: %d tunnels%s\n", len(st.Tunnels), boot)
 			for _, t := range st.Tunnels {
-				fmt.Printf("  %s: %s, %s", t.Name, describe(t), t.State)
-				if t.Error != "" {
-					fmt.Printf(": %s", t.Error)
-				}
-				fmt.Println()
-				for _, p := range t.Peers {
-					fmt.Printf("    peer %s: handshake %s, received %s, sent %s\n", p.PublicKey, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
-				}
+				printTunnel(t)
 			}
 			set := st.Settings
 			on := map[bool]string{true: "on", false: "off"}
@@ -691,59 +678,149 @@ func status(name string) error {
 	} else {
 		fmt.Println("Manager: not installed (splitwire manager install)")
 	}
-	installed, err := service.List()
-	if err != nil {
-		return err
-	}
-	for _, in := range installed {
-		fmt.Printf("Service %s: %s\n", service.Name(in.Tunnel), stateName(in.State))
-		if in.State == svc.Running {
-			if _, err := engine.PrintAdapterStatus(os.Stdout, in.Tunnel); err != nil {
-				fmt.Printf("  %v\n", err)
-			}
-		}
-	}
 	if name != "" {
-		found, err := engine.PrintAdapterStatus(os.Stdout, name)
-		if err != nil {
-			return err
+		found := st != nil && st.Find(name) != nil
+		if elevated {
+			adapter, err := engine.PrintAdapterStatus(os.Stdout, name)
+			if err != nil {
+				return err
+			}
+			found = found || adapter
 		}
-		if !found {
+		switch {
+		case found:
+		case elevated:
 			fmt.Printf("No running tunnel named %s.\n", name)
+		default:
+			fmt.Printf("The SplitWire service runs no tunnel named %s; an administrator console also finds tunnels started with splitwire up.\n", name)
 		}
 	}
 
-	drv, err := stdriver.Open()
 	switch {
-	case errors.Is(err, stdriver.ErrNotLoaded):
-		fmt.Println("Split tunnel driver: not loaded")
-	case errors.Is(err, stdriver.ErrInUse):
-		fmt.Println("Split tunnel driver: in use by a running tunnel")
-	case err != nil:
-		fmt.Printf("Split tunnel driver: %v\n", err)
+	case st != nil && st.Driver != "":
+		fmt.Printf("Split tunnel driver: %s\n", st.Driver)
+	case elevated:
+		fmt.Printf("Split tunnel driver: %s\n", stdriver.Describe())
 	default:
-		st, err := drv.State()
-		drv.Close()
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Split tunnel driver: loaded, %s\n", st)
+		fmt.Println("Split tunnel driver: an administrator console shows it")
 	}
 	return nil
 }
 
-func stateName(s svc.State) string {
-	switch s {
-	case svc.Stopped:
-		return "stopped"
-	case svc.StartPending:
-		return "starting"
-	case svc.StopPending:
-		return "stopping"
-	case svc.Running:
-		return "running"
+// printTunnel prints a tunnel the SplitWire service runs, with its peers.
+func printTunnel(t ipc.Tunnel) {
+	fmt.Printf("  %s: %s, %s", t.Name, describe(t), t.State)
+	if t.Error != "" {
+		fmt.Printf(": %s", t.Error)
 	}
-	return fmt.Sprintf("state %d", s)
+	fmt.Println()
+	for _, p := range t.Peers {
+		at := ""
+		if p.Endpoint != "" {
+			at = " at " + p.Endpoint
+		}
+		fmt.Printf("    peer %s%s: handshake %s, received %s, sent %s\n", p.PublicKey, at, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
+	}
+}
+
+// connect brings a tunnel up in the SplitWire service, as the app's menu
+// does: as the Split VPN when its Mode picks apps and as a VPN otherwise,
+// or as the flag says. A proxy without a Proxy address gets one written to
+// its file first.
+func connect(args []string) error {
+	const usage = "usage: splitwire connect <tunnel> [--split|--vpn|--proxy]"
+	arg, as := "", ""
+	for _, a := range args {
+		way := map[string]string{"--split": ipc.AsSplit, "--vpn": ipc.AsVPN, "--proxy": ipc.AsProxy}[a]
+		switch {
+		case way != "" && as == "":
+			as = way
+		case !strings.HasPrefix(a, "-") && arg == "":
+			arg = a
+		default:
+			return errors.New(usage)
+		}
+	}
+	if arg == "" {
+		return errors.New(usage)
+	}
+	if !manager.Installed() {
+		return errors.New("the SplitWire service is not installed (splitwire manager install)")
+	}
+	path, err := existingConf(arg)
+	if err != nil {
+		return err
+	}
+	if as == ipc.AsProxy {
+		if _, err := userconf.EnsureProxy(path); err != nil {
+			return err
+		}
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	warnScripts(c)
+	text, err := c.WithExpandedApps()
+	if err != nil {
+		return err
+	}
+	if as == "" {
+		as = ipc.AsVPN
+		if c.Mode != config.ModeFull {
+			as = ipc.AsSplit
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rep, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpUp, Name: c.WG.Name, As: as, Config: text})
+	if err != nil {
+		return err
+	}
+	if t := rep.Status.Find(c.WG.Name); t != nil {
+		printTunnel(*t)
+	}
+	return nil
+}
+
+// disconnect takes down a tunnel the SplitWire service runs, or every one.
+func disconnect(args []string) error {
+	const usage = "usage: splitwire disconnect <name> | --all"
+	if len(args) != 1 || (strings.HasPrefix(args[0], "-") && args[0] != "--all") {
+		return errors.New(usage)
+	}
+	if !manager.Installed() {
+		return errors.New("the SplitWire service is not installed (splitwire manager install)")
+	}
+	name := args[0]
+	if name == "--all" {
+		name = ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := ipc.Dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if name != "" {
+		rep, err := conn.Call(ipc.Request{Op: ipc.OpStatus})
+		if err != nil {
+			return err
+		}
+		if rep.Status.Find(name) == nil {
+			return fmt.Errorf("the SplitWire service runs no tunnel named %s", name)
+		}
+	}
+	if _, err := conn.Call(ipc.Request{Op: ipc.OpDown, Name: name}); err != nil {
+		return err
+	}
+	if name == "" {
+		fmt.Println("Disconnected every tunnel")
+	} else {
+		fmt.Printf("Disconnected %s\n", name)
+	}
+	return nil
 }
 
 // selfUpdate installs the newest signed release over the installed copy,
@@ -857,23 +934,6 @@ func direct(args []string) error {
 	return nil
 }
 
-// bootstrapAll installs wireguard.dll, the WireGuardNT driver and the
-// split tunnel driver.
-func bootstrapAll() error {
-	ctx := context.Background()
-	if err := bootstrap.EnsureDirs(); err != nil {
-		return err
-	}
-	if err := bootstrap.EnsureWireGuardNT(ctx); err != nil {
-		return err
-	}
-	if err := ensureSplitDriver(ctx); err != nil {
-		return err
-	}
-	log.Printf("Ready: wireguard.dll, the WireGuardNT driver and the split tunnel driver (service %s running)", stdriver.ServiceName)
-	return nil
-}
-
 // ensureSplitDriver installs the split tunnel driver and starts its service.
 func ensureSplitDriver(ctx context.Context) error {
 	if err := bootstrap.EnsureDirs(); err != nil {
@@ -886,21 +946,12 @@ func ensureSplitDriver(ctx context.Context) error {
 	return bootstrap.EnsureDriverService(sys)
 }
 
-// cleanup removes everything splitwire installed: its services, the split
+// cleanup removes everything splitwire installed: its service, the split
 // tunnel driver, firewall objects, Program Files\splitwire, the sign-in
 // entry and temporary files. With wireguardNT, the WireGuardNT driver goes
 // too unless the WireGuard app, which shares it, is installed. With
 // configs, the tunnel configurations in %APPDATA%\splitwire go as well.
 func cleanup(configs, wireguardNT bool) error {
-	installed, err := service.List()
-	if err != nil {
-		return err
-	}
-	for _, in := range installed {
-		if err := service.Uninstall(in.Tunnel); err != nil {
-			return err
-		}
-	}
 	if err := manager.Uninstall(); err != nil {
 		return err
 	}
@@ -941,10 +992,8 @@ func cleanup(configs, wireguardNT bool) error {
 		log.Printf("Removed %s", root)
 	}
 
-	for _, where := range []func(string) (string, error){shortcut.StartMenu, shortcut.CommonStartMenu} {
-		if lnk, err := where(tray.StartMenuName); err == nil && os.Remove(lnk) == nil {
-			log.Printf("Removed the Start menu shortcut %s", lnk)
-		}
+	if lnk, err := shortcut.StartMenu(tray.StartMenuName); err == nil && os.Remove(lnk) == nil {
+		log.Printf("Removed the Start menu shortcut %s", lnk)
 	}
 	if err := tray.RemoveRunAtLogin(); err != nil {
 		log.Printf("Warning: remove the sign-in entry: %v", err)

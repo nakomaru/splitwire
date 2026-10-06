@@ -28,6 +28,7 @@ import (
 	"splitwire/internal/proxy"
 	"splitwire/internal/settings"
 	"splitwire/internal/stats"
+	"splitwire/internal/stdriver"
 )
 
 // running is a tunnel the manager runs: through an adapter, as the Split
@@ -72,15 +73,11 @@ type manager struct {
 	direct []netip.Prefix
 }
 
-type service struct {
-	// legacyUser is the user an install that predates the users file
-	// passed on the command line; it joins the users.
-	legacyUser string
-}
+type service struct{}
 
 // Run executes the manager service.
-func Run(legacyUser string) error {
-	return svc.Run(ServiceName, &service{legacyUser: legacyUser})
+func Run() error {
+	return svc.Run(ServiceName, &service{})
 }
 
 func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
@@ -94,11 +91,6 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 		os.MkdirAll(dir, 0o700)
 		if f, err := logx.Setup(filepath.Join(dir, "manager.log"), m.ring); err == nil {
 			defer f.Close()
-		}
-	}
-	if s.legacyUser != "" {
-		if err := addUser(s.legacyUser); err != nil {
-			log.Printf("Warning: %v", err)
 		}
 	}
 	users := Users()
@@ -230,6 +222,9 @@ func (m *manager) handle(c *ipc.Conn) {
 		}
 		if req.Op != ipc.OpLog {
 			st := m.snapshot()
+			if req.Op == ipc.OpStatus {
+				st.Driver = m.driverStatus(st)
+			}
 			rep.Status = &st
 		}
 		if err := c.Send(rep); err != nil {
@@ -339,6 +334,22 @@ func (m *manager) refreshPeers() {
 	})
 }
 
+// driverStatus describes the split tunnel driver. The Split VPN holds the
+// device's only handle while it runs, and a tunnel coming up may be about
+// to take it, so the device opens only while no operation is in progress.
+func (m *manager) driverStatus(st ipc.Status) string {
+	for _, t := range st.Tunnels {
+		if t.As == ipc.AsSplit && t.Running() {
+			return "used by the Split VPN " + t.Name
+		}
+	}
+	if !m.op.TryLock() {
+		return "busy while a tunnel connects or disconnects"
+	}
+	defer m.op.Unlock()
+	return stdriver.Describe()
+}
+
 // tick refreshes peer statistics while anyone watches.
 func (m *manager) tick(stop chan struct{}) {
 	tk := time.NewTicker(statsInterval)
@@ -397,6 +408,9 @@ func (m *manager) up(name, as, text string) error {
 	default:
 		entry.Listen = c.Proxy.String()
 		log.Printf("Starting %s as a proxy on %s", name, c.Proxy)
+	}
+	if scripts := c.Scripts(); len(scripts) > 0 {
+		log.Printf("Warning: %s sets %s, which SplitWire never runs", name, strings.Join(scripts, ", "))
 	}
 	m.setTunnel(name, func(t *ipc.Tunnel) { *t = entry })
 	fail := func(err error) error {
@@ -607,26 +621,13 @@ func loadResume() ([]bootEntry, bool) {
 	return entries, true
 }
 
-// loadBoot reads the boot tunnels and whether boot start is on. A boot
-// tunnel in the legacy files becomes an entry of bootFile.
+// loadBoot reads the boot tunnels and whether boot start is on.
 func (m *manager) loadBoot() ([]bootEntry, bool) {
 	dir, err := bootstrap.ConfigsDir()
 	if err != nil {
 		return nil, false
 	}
-	path := filepath.Join(dir, bootFile)
-	if name, err := os.ReadFile(filepath.Join(dir, legacyBootName)); err == nil {
-		if text, err := os.ReadFile(filepath.Join(dir, legacyBootConf)); err == nil {
-			entries := []bootEntry{{Name: strings.TrimSpace(string(name)), As: adapterRole(string(text)), Config: string(text)}}
-			if err := writeBoot(path, entries); err != nil {
-				log.Printf("Convert the boot tunnel: %v", err)
-				return entries, true
-			}
-		}
-		os.Remove(filepath.Join(dir, legacyBootName))
-		os.Remove(filepath.Join(dir, legacyBootConf))
-	}
-	entries, err := readEntries(path)
+	entries, err := readEntries(filepath.Join(dir, bootFile))
 	if os.IsNotExist(err) {
 		return nil, false
 	}
@@ -647,23 +648,9 @@ func readEntries(path string) ([]bootEntry, error) {
 	if err := json.Unmarshal(b, &entries); err != nil {
 		return nil, err
 	}
-	for i := range entries {
-		if entries[i].As == ipc.AsVPN {
-			entries[i].As = adapterRole(entries[i].Config)
-		}
-	}
 	rank := map[string]int{ipc.AsSplit: 0, ipc.AsVPN: 1, ipc.AsProxy: 2}
 	sort.SliceStable(entries, func(i, j int) bool { return rank[entries[i].As] < rank[entries[j].As] })
 	return entries, nil
-}
-
-// adapterRole is the way a boot entry recorded as a VPN runs: the Split VPN
-// when its configuration picks apps, a VPN otherwise.
-func adapterRole(text string) string {
-	if c, err := config.Parse(text, "boot"); err == nil && c.Mode != config.ModeFull {
-		return ipc.AsSplit
-	}
-	return ipc.AsVPN
 }
 
 func writeBoot(path string, entries []bootEntry) error {

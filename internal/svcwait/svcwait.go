@@ -88,16 +88,6 @@ func Until(name string, done func(state, pid uint32) bool) error {
 	}
 }
 
-// Running blocks until the named service is running and returns its process ID.
-func Running(name string) (uint32, error) {
-	var pid uint32
-	err := Until(name, func(state, p uint32) bool {
-		pid = p
-		return state == windows.SERVICE_RUNNING
-	})
-	return pid, err
-}
-
 // RunningOtherThan blocks until the named service runs in a process other
 // than old, such as after the service restarts.
 func RunningOtherThan(name string, old uint32) (uint32, error) {

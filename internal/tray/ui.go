@@ -172,6 +172,9 @@ const (
 	glyphCircleRing   = '\uEA3A'
 	glyphCircleFill   = '\uEA3B'
 	glyphRadioOff     = '\uECCA'
+	glyphRefresh      = '\uE72C'
+	glyphView         = '\uE890'
+	glyphHide         = '\uED1A'
 )
 
 type kind int
@@ -234,6 +237,8 @@ type control struct {
 	// selection of a list as checkboxes, leaving its rows unshaded.
 	empty  string
 	checks bool
+	// warn outlines an edit box whose text has a problem.
+	warn bool
 	// tip is the control's tooltip; tipped reports that it has one.
 	tip    string
 	tipped bool
@@ -872,7 +877,11 @@ func (f *form) paintForm() {
 // paintField draws the box around an edit box or list, with an accent line
 // under a focused edit box.
 func (f *form) paintField(dc uintptr, c *control, focused bool) {
-	fillRound(dc, c.r, f.px(8), f.col.field, f.col.border)
+	border := f.col.border
+	if c.warn {
+		border = f.col.err
+	}
+	fillRound(dc, c.r, f.px(8), f.col.field, border)
 	if c.kind == kindList && c.empty != "" {
 		if n, _, _ := procSendMessageW.Call(c.hwnd, lbGetCount, 0, 0); n == 0 {
 			r := c.r

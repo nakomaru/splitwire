@@ -156,22 +156,6 @@ func ReplaceExe(b []byte) error {
 	return replaceFile(dst, b)
 }
 
-// legacyTrayExe is the separate tray executable of earlier installs.
-const legacyTrayExe = "splitwire-tray.exe"
-
-// RemoveLegacyTray deletes the separate tray executable, or schedules it
-// for deletion at the next restart while it runs.
-func RemoveLegacyTray() {
-	bin, err := BinDir()
-	if err != nil {
-		return
-	}
-	path := filepath.Join(bin, legacyTrayExe)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		deleteAtRestart(path)
-	}
-}
-
 // RemoveRoot deletes the install root. Files in use, such as the running
 // tray app, are scheduled for deletion at the next restart along with
 // their folders; it reports how many.

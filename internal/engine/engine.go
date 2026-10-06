@@ -145,24 +145,6 @@ func adapterGUID(name string) *windows.GUID {
 	return &g
 }
 
-// Run brings the tunnel up, with the saved settings, and keeps it up until
-// ctx ends.
-func Run(ctx context.Context, c *config.Config) error {
-	s := settings.LoadOrDefaults()
-	if err := SetSettings(s); err != nil {
-		return err
-	}
-	t, err := Up(ctx, c, s.DirectPrefixes())
-	if err != nil {
-		return err
-	}
-	log.Printf("Tunnel %s is up (mode %s)", c.WG.Name, c.Mode)
-	<-ctx.Done()
-	log.Printf("Shutting down tunnel %s", c.WG.Name)
-	t.Down()
-	return nil
-}
-
 // Up brings the tunnel up, leaving the direct prefixes out of its routes.
 // On failure it undoes what it did.
 func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (*Tunnel, error) {

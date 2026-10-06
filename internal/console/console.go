@@ -16,6 +16,7 @@ var (
 	procGetConsoleProcessList = kernel32.NewProc("GetConsoleProcessList")
 	procAllocConsole          = kernel32.NewProc("AllocConsole")
 	procFreeConsole           = kernel32.NewProc("FreeConsole")
+	procGetConsoleWindow      = kernel32.NewProc("GetConsoleWindow")
 )
 
 // Kind is how the process relates to a console.
@@ -43,6 +44,17 @@ func Current() Kind {
 		return Own
 	}
 	return Shared
+}
+
+// Hidden reports a console without a window, as a program started with
+// CREATE_NO_WINDOW has, such as a script runner's or an agent's command.
+// Terminals, Windows Terminal's pseudoconsoles among them, have a window.
+func Hidden() bool {
+	if Current() == None {
+		return false
+	}
+	w, _, _ := procGetConsoleWindow.Call()
+	return w == 0
 }
 
 // Free detaches from the console, closing a console window of its own.

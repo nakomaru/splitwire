@@ -33,8 +33,9 @@ lives in the notification area and updates itself.
 ## Tunnels
 
 Tunnels are files in `%APPDATA%\splitwire`. **Add** in the window imports
-them from the WireGuard app or a file, creates a free Cloudflare WARP
-tunnel, or starts an empty one. Split tunneling settings go in a
+them from the WireGuard app, a file, or a QR code in an image file, on the
+clipboard or on the screen; creates a free Cloudflare WARP tunnel; or
+starts an empty one. Split tunneling settings go in a
 `[SplitWire]` section, which the window edits; see
 [example.conf](example.conf):
 
@@ -43,6 +44,17 @@ tunnel, or starts an empty one. Split tunneling settings go in a
 | `Mode` | `include` or `exclude`, for the Split VPN | `full`: not a Split VPN |
 | `App` | path to an app; `%VAR%` and `*` globs allowed; repeatable | |
 | `Proxy` | port, or address and port | picked from 1080 up |
+
+The **Details** tab edits a tunnel's WireGuard settings, those of its
+interface or of one peer at a time: keys, addresses, DNS servers, listen
+port, MTU, endpoint, keepalive and allowed IPs, and adds and removes peers.
+It checks each field as you type, and Save writes only the fields that
+changed, keeping the file's comments. **Exclude private IPs** takes the
+local network's private ranges out of a peer that carries every address.
+**Test**, beside MTU, pings the peer's endpoint over IPv4 or IPv6 with
+packets that may not be split, finds the largest that arrives, and fills in
+the MTU that fits it. SplitWire never runs `PreUp`, `PostUp`, `PreDown` or
+`PostDown` scripts, and says so when a tunnel has them.
 
 ## Overview
 
@@ -80,11 +92,21 @@ splitwire direct add 203.0.113.0/24 vpn.office.example
 ## Command line
 
 ```
-splitwire import           # copy tunnels from the WireGuard app
-splitwire up home          # run a tunnel until Ctrl+C
-splitwire proxy warp       # run a tunnel as a proxy until Ctrl+C
-splitwire help             # every command
+splitwire import                 # copy tunnels from the WireGuard app
+splitwire qr code.png            # import a tunnel from a QR code; also --clipboard or --screen
+splitwire connect home           # connect a tunnel in the service, as the app does
+splitwire connect warp --proxy   # ... as a proxy
+splitwire disconnect warp        # disconnect it
+splitwire status                 # tunnels, peers and the split tunnel driver
+splitwire proxy warp             # run a tunnel as a proxy until Ctrl+C
+splitwire help                   # every command
 ```
+
+`connect`, `disconnect`, `direct` and `status` go through the SplitWire
+service and need no administrator rights, so scripts and agents can use
+them. Commands that change the system ask for administrator rights; from a
+console without a window, such as a script runner's, where no one sees the
+prompt, they fail at once and say so.
 
 The installed copy is `%ProgramFiles%\splitwire\bin\splitwire.exe`.
 

@@ -24,7 +24,6 @@ func TestParseInclude(t *testing.T) {
 Mode = include  # comment
 App = C:\Program Files\Mozilla Firefox\firefox.exe
 App = %SystemRoot%\System32\curl.exe
-AllowLAN = yes
 `, "home")
 	if err != nil {
 		t.Fatal(err)

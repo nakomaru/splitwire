@@ -102,12 +102,10 @@ type window struct {
 
 	portLabel, port, portNote, copyAddr, proxyHint *control
 
-	hIface, pubLabel, pub, copyPub, addrLabel, addrs, dnsLabel, dnsList *control
-	hPeer, endLabel, endpoint, allowLabel, allowed                      *control
-
 	editor, parse, revert, save *control
 
-	ov overviewControls
+	det detailsControls
+	ov  overviewControls
 }
 
 // windowCreating marks a.win while the window thread starts.
@@ -180,8 +178,11 @@ func newWindow(a *app) *window {
 	f.command = w.command
 	f.enter = w.enter
 	f.save = func() {
-		if w.tab == tabText && w.dirty {
+		switch {
+		case w.tab == tabText && w.dirty:
 			w.saveText()
+		case w.tab == tabDetails && w.f.enabled(w.det.save):
+			w.saveDetails()
 		}
 	}
 	f.key = w.key
@@ -199,8 +200,12 @@ func newWindow(a *app) *window {
 		procPostQuitMessage.Call(0)
 	}
 	f.message = func(msg, wparam, lparam uintptr) (uintptr, bool) {
-		if msg == wmRefresh {
+		switch msg {
+		case wmRefresh:
 			w.refresh()
+			return 0, true
+		case wmProbed:
+			w.probed()
 			return 0, true
 		}
 		return 0, false
@@ -250,21 +255,7 @@ func newWindow(a *app) *window {
 		text: "Apps use the tunnel through their SOCKS5 or HTTP proxy setting, pointed at this address. " +
 			"Its packets go straight to its server, never through a VPN."})
 
-	w.hIface = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Interface"})
-	w.pubLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Public key"})
-	w.pub = f.add(&control{kind: kindLabel})
-	w.copyPub = f.add(&control{kind: kindIcon, glyph: glyphCopy})
-	f.setTip(w.copyPub, "Copy the public key")
-	w.addrLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Addresses"})
-	w.addrs = f.add(&control{kind: kindLabel})
-	w.dnsLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "DNS servers"})
-	w.dnsList = f.add(&control{kind: kindLabel})
-	w.hPeer = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Peer"})
-	w.endLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Endpoint"})
-	w.endpoint = f.add(&control{kind: kindLabel})
-	w.allowLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Allowed IPs"})
-	w.allowed = f.add(&control{kind: kindLabel})
-
+	w.addDetails(f)
 	w.addOverview(f)
 
 	w.editor = f.addRich(&control{font: fontMono}, esMultiline|esAutoVScroll|wsVScroll|wsHScroll|esWantReturn|esNoHideSel)
@@ -355,7 +346,7 @@ func (w *window) layout(cw, ch int32) {
 
 	w.layoutVPN(x0, x1, y, by+bh)
 	w.layoutProxy(x0, x1, y)
-	w.layoutDetails(x0, x1, y)
+	w.layoutDetails(x0, x1, y, by-s(10), by)
 
 	// Text tab.
 	f.place(w.editor, rect{x0, y, x1, by - s(10)})
@@ -411,30 +402,6 @@ func (w *window) layoutProxy(x0, x1, y int32) {
 	f.place(w.proxyHint, rect{x0, y, x1, y + h})
 }
 
-func (w *window) layoutDetails(x0, x1, y int32) {
-	f := w.f
-	s := f.px
-	lblW := s(110)
-	pair := func(label, value *control) {
-		f.place(label, rect{x0, y, x0 + lblW, y + s(24)})
-		f.place(value, rect{x0 + lblW, y, x1 - s(36), y + s(24)})
-		y += s(28)
-	}
-	f.place(w.hIface, rect{x0, y, x1, y + s(22)})
-	y += s(30)
-	pair(w.pubLabel, w.pub)
-	pw, _ := f.measure(w.pub.text, f.fonts[fontNormal])
-	px := clamp(x0+lblW+pw+s(6), x0+lblW, x1-s(28))
-	f.place(w.copyPub, rect{px, w.pub.r.top, px + s(28), w.pub.r.bottom})
-	pair(w.addrLabel, w.addrs)
-	pair(w.dnsLabel, w.dnsList)
-	y += s(16)
-	f.place(w.hPeer, rect{x0, y, x1, y + s(22)})
-	y += s(30)
-	pair(w.endLabel, w.endpoint)
-	pair(w.allowLabel, w.allowed)
-}
-
 // relayout lays the window out again after controls appear or vanish.
 func (w *window) relayout() {
 	var r rect
@@ -484,7 +451,7 @@ func (w *window) refresh() {
 	if name != w.sel {
 		w.sel = name
 		w.load()
-	} else if w.sel != "" && !w.dirty {
+	} else if w.sel != "" && !w.dirty && !w.detailsDirty() {
 		// The file may have changed on disk.
 		if b, err := os.ReadFile(w.path); err == nil && normalize(string(b)) != w.text {
 			w.load()
@@ -567,6 +534,7 @@ func (w *window) load() {
 	if focus, _, _ := procGetFocus.Call(); focus != w.port.hwnd {
 		w.f.setText(w.port, port)
 	}
+	w.loadDetails()
 }
 
 // describeApp finds what an App entry matches.
@@ -672,9 +640,9 @@ func (w *window) update() {
 	if c := w.cfg; c != nil {
 		w.updateVPN(c)
 		w.updateProxy(c)
-		if w.updateDetails(c) {
-			layoutChanged = true
-		}
+	}
+	if w.updateDetails() {
+		layoutChanged = true
 	}
 	w.showTab(w.tab)
 	if layoutChanged {
@@ -719,56 +687,6 @@ func (w *window) updateProxy(c *config.Config) {
 	}
 	f.setText(w.portNote, note)
 	f.enable(w.copyAddr, c.Proxy.IsValid())
-}
-
-// updateDetails shows the tunnel's interface and first peer, and reports
-// whether the layout needs to follow.
-func (w *window) updateDetails(c *config.Config) bool {
-	f := w.f
-	changed := false
-	if pub := c.WG.Interface.PrivateKey.Public().String(); pub != w.pub.text {
-		f.setText(w.pub, pub)
-		changed = true
-	}
-	value := func(l *control, items []string, none string) {
-		text := strings.Join(items, ", ")
-		if text == "" {
-			text = none
-		}
-		f.setText(l, text)
-		if text != l.tip {
-			f.setTip(l, text)
-		}
-	}
-	var addrs, dns []string
-	for _, a := range c.WG.Interface.Addresses {
-		addrs = append(addrs, a.String())
-	}
-	for _, d := range c.WG.Interface.DNS {
-		dns = append(dns, d.String())
-	}
-	dns = append(dns, c.WG.Interface.DNSSearch...)
-	value(w.addrs, addrs, "None")
-	value(w.dnsList, dns, "None; the system's servers")
-
-	head := "Peer"
-	if n := len(c.WG.Peers); n > 1 {
-		head = fmt.Sprintf("Peer 1 of %d", n)
-	}
-	f.setText(w.hPeer, head)
-	var endpoint, allowed []string
-	if len(c.WG.Peers) > 0 {
-		p := c.WG.Peers[0]
-		if !p.Endpoint.IsEmpty() {
-			endpoint = []string{p.Endpoint.String()}
-		}
-		for _, a := range p.AllowedIPs {
-			allowed = append(allowed, a.String())
-		}
-	}
-	value(w.endpoint, endpoint, "None")
-	value(w.allowed, allowed, "None")
-	return changed
 }
 
 func (r rect) empty() bool { return r.right <= r.left || r.bottom <= r.top }
@@ -841,10 +759,7 @@ func (w *window) showTab(i int) {
 	for _, c := range []*control{w.portLabel, w.port, w.portNote, w.copyAddr, w.proxyHint} {
 		f.show(c, formOK && i == tabProxy)
 	}
-	for _, c := range []*control{w.hIface, w.pubLabel, w.pub, w.copyPub, w.addrLabel, w.addrs, w.dnsLabel, w.dnsList,
-		w.hPeer, w.endLabel, w.endpoint, w.allowLabel, w.allowed} {
-		f.show(c, formOK && i == tabDetails)
-	}
+	w.showDetails(formOK && i == tabDetails)
 	for _, c := range []*control{w.editor, w.parse, w.revert, w.save} {
 		f.show(c, w.sel != "" && i == tabText)
 	}
@@ -876,7 +791,7 @@ func (w *window) command(c *control, code uint16) {
 		}
 		return
 	}
-	if w.overviewCommand(c, code) || code != bnClicked {
+	if w.detailsCommand(c, code) || w.overviewCommand(c, code) || code != bnClicked {
 		return
 	}
 	name := w.sel
@@ -899,7 +814,7 @@ func (w *window) command(c *control, code uint16) {
 		go w.a.apply(name)
 	case w.tabs[tabVPN], w.tabs[tabProxy], w.tabs[tabDetails], w.tabs[tabText]:
 		for i, t := range w.tabs {
-			if t == c && i != w.tab && (w.tab != tabText || w.confirmLeave()) {
+			if t == c && i != w.tab && (w.tab != tabText && w.tab != tabDetails || w.confirmLeave()) {
 				w.showTab(i)
 			}
 		}
@@ -917,8 +832,6 @@ func (w *window) command(c *control, code uint16) {
 		if w.cfg != nil && w.cfg.Proxy.IsValid() {
 			w.copy(w.cfg.Proxy.String())
 		}
-	case w.copyPub:
-		w.copy(w.pub.text)
 	case w.revert:
 		w.load()
 		w.update()
@@ -930,6 +843,8 @@ func (w *window) command(c *control, code uint16) {
 func (w *window) enter() {
 	if focus, _, _ := procGetFocus.Call(); focus == w.port.hwnd {
 		w.applyPort()
+	} else if w.tab == tabDetails && w.f.enabled(w.det.save) {
+		w.saveDetails()
 	}
 }
 

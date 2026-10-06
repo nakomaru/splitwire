@@ -99,6 +99,9 @@ type Status struct {
 	Users int `json:",omitempty"`
 	// Settings are the machine-wide choices in force.
 	Settings settings.Settings
+	// Driver describes the split tunnel driver in a reply to OpStatus, for
+	// clients without the administrator rights to open it.
+	Driver string `json:",omitempty"`
 }
 
 // Find returns the named tunnel, or nil.

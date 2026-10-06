@@ -87,14 +87,20 @@ func NewEmpty() (string, error) {
 }
 
 // Import copies a WireGuard configuration file in as a tunnel named after
-// the file, adding the example [SplitWire] section when it has none.
+// the file.
 func Import(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	text := strings.TrimPrefix(string(b), "\uFEFF")
-	name := importName(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	return ImportText(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), string(b))
+}
+
+// ImportText saves WireGuard configuration text as a tunnel named after
+// base, adding the example [SplitWire] section when it has none.
+func ImportText(base, text string) (string, error) {
+	text = strings.TrimPrefix(text, "\uFEFF")
+	name := importName(base)
 	if _, err := config.Parse(text, name); err != nil {
 		return "", err
 	}

@@ -98,6 +98,26 @@ func Open() (*Driver, error) {
 	return &Driver{h: h}, nil
 }
 
+// Describe opens the device for a moment and reports its state, or why it
+// could not open it. Opening needs administrator rights.
+func Describe() string {
+	d, err := Open()
+	switch {
+	case errors.Is(err, ErrNotLoaded):
+		return "not loaded"
+	case errors.Is(err, ErrInUse):
+		return "in use by a running tunnel"
+	case err != nil:
+		return err.Error()
+	}
+	defer d.Close()
+	st, err := d.State()
+	if err != nil {
+		return err.Error()
+	}
+	return "loaded, " + st.String()
+}
+
 // CancelPending cancels outstanding requests, such as a blocked DequeueEvent.
 func (d *Driver) CancelPending() {
 	if d.h != 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"regexp"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"splitwire/internal/config"
 	"splitwire/internal/ipc"
+	"splitwire/internal/qr"
 	"splitwire/internal/userconf"
 	"splitwire/internal/warp"
 )
@@ -29,14 +31,18 @@ func (w *window) copy(s string) {
 	}
 }
 
-// confirmLeave asks what to do with unsaved text, and reports whether the
+// confirmLeave asks what to do with unsaved text or details, and reports whether the
 // window may move on.
 func (w *window) confirmLeave() bool {
-	if !w.dirty {
+	details := w.detailsDirty()
+	if !w.dirty && !details {
 		return true
 	}
 	switch messageBox(w.f.hwnd, "Save the changes to "+w.sel+"?", windows.MB_YESNOCANCEL|windows.MB_ICONWARNING) {
 	case idYes:
+		if details {
+			return w.saveDetails()
+		}
 		return w.saveText()
 	case idNo:
 		w.load()
@@ -154,7 +160,7 @@ func (w *window) applyPort() {
 func (w *window) checkText() {
 	text := normalize(windowText(w.editor.hwnd))
 	w.dirty = w.sel != "" && text != w.text
-	_, err := config.Parse(text, w.sel)
+	c, err := config.Parse(text, w.sel)
 	f := w.f
 	w.errLine = 0
 	msg := ""
@@ -171,6 +177,13 @@ func (w *window) checkText() {
 			msg = fmt.Sprintf("Line %d: %s", w.errLine, msg)
 		}
 		f.setText(w.parse, msg)
+	case len(c.Scripts()) > 0:
+		w.parse.color = labelCaution
+		msg = scriptsNote(c)
+		if w.dirty {
+			msg += " Save to keep the changes."
+		}
+		f.setText(w.parse, msg)
 	case w.dirty:
 		w.parse.color = labelSuccess
 		f.setText(w.parse, "No problems found. Save to keep the changes.")
@@ -181,6 +194,11 @@ func (w *window) checkText() {
 	f.invalidate(w.parse)
 	f.enable(w.save, w.dirty && err == nil)
 	f.enable(w.revert, w.dirty)
+}
+
+// scriptsNote says that SplitWire never runs the tunnel's scripts.
+func scriptsNote(c *config.Config) string {
+	return "SplitWire never runs " + strings.Join(c.Scripts(), ", ") + "."
 }
 
 // highlight colors the editor's text again, after the colors change.
@@ -282,10 +300,61 @@ func (w *window) addMenu() {
 			w.selectNew(name, tabVPN)
 		}},
 		{text: "Import from the WireGuard app...", run: func() { go w.a.importTunnels() }},
+		{text: "Import a QR code from a file...", run: func() {
+			path, ok := openFile(f.hwnd, "Import a QR code", "Images (*.png;*.jpg;*.jpeg;*.gif;*.bmp)",
+				"*.png;*.jpg;*.jpeg;*.gif;*.bmp", "All files", "*.*")
+			if ok {
+				w.importQR(func() (image.Image, error) { return qr.File(path) })
+			}
+		}},
+		{text: "Import a QR code from the clipboard", run: func() { w.importQR(qr.Clipboard) }},
+		{text: "Import a QR code on the screen", run: func() { w.importQR(qr.Screen) }},
 		{text: "Create a WARP tunnel...", run: w.createWARP},
 		{},
 		{text: "Open the configuration folder", run: w.a.openFolder},
 	})
+}
+
+// importQR saves the tunnel in the QR code of the image that read
+// returns, under a name the user picks.
+func (w *window) importQR(read func() (image.Image, error)) {
+	fail := func(msg string, err error) {
+		messageBox(w.f.hwnd, msg+":\n\n"+err.Error(), windows.MB_ICONWARNING)
+	}
+	img, err := read()
+	if err != nil {
+		fail("Could not read the image", err)
+		return
+	}
+	text, err := qr.Decode(img)
+	if err != nil {
+		fail("Could not read a QR code", err)
+		return
+	}
+	if _, err := config.Parse(text, "QR"); err != nil {
+		fail("The QR code holds no WireGuard tunnel", err)
+		return
+	}
+	name, ok := askText(w.f.hwnd, "Import a QR code", "Name for the new tunnel:", "QR", func(s string) error {
+		if err := userconf.ValidName(s); err != nil {
+			return err
+		}
+		for _, n := range w.snap.names {
+			if strings.EqualFold(n, s) {
+				return fmt.Errorf("a tunnel named %s exists", n)
+			}
+		}
+		return nil
+	})
+	if !ok {
+		return
+	}
+	saved, err := userconf.ImportText(name, text)
+	if err != nil {
+		fail("Could not save the tunnel", err)
+		return
+	}
+	w.selectNew(saved, tabDetails)
 }
 
 // selectNew selects a tunnel that was just written, on the tab.

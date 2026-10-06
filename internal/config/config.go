@@ -153,17 +153,12 @@ func (c *Config) set(key, val string) error {
 			return fmt.Errorf("App needs a path")
 		}
 		c.Apps = append(c.Apps, val)
-	case "killswitch", "allowlan", "strictdns":
-		// Accepted and ignored: the kill switch, its local network exception
-		// and the DNS restriction are machine-wide settings.
 	case "proxy":
 		ap, err := ParseProxy(val)
 		if err != nil {
 			return err
 		}
 		c.Proxy = ap
-	case "proxyvia":
-		// Accepted and ignored: proxies connect directly to their endpoints.
 	default:
 		return fmt.Errorf("unknown [SplitWire] key %q", key)
 	}
@@ -230,6 +225,20 @@ func (c *Config) HasDefaultRoute() bool {
 func (c *Config) ScopedDNS() bool {
 	return c.Mode == ModeFull && !c.WG.Interface.TableOff && !c.HasDefaultRoute() &&
 		len(c.WG.Interface.DNS) > 0 && len(c.WG.Interface.DNSSearch) > 0
+}
+
+// Scripts names the interface's script settings, which SplitWire never
+// runs.
+func (c *Config) Scripts() []string {
+	var names []string
+	i := c.WG.Interface
+	for _, s := range []struct{ key, val string }{{"PreUp", i.PreUp}, {"PostUp", i.PostUp},
+		{"PreDown", i.PreDown}, {"PostDown", i.PostDown}} {
+		if s.val != "" {
+			names = append(names, s.key)
+		}
+	}
+	return names
 }
 
 func expandEnv(s string) (string, error) {

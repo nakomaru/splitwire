@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,10 +64,15 @@ func TestWindowShots(t *testing.T) {
 		"App = C:\\Games\\Missing\\game.exe\n"+config.ExampleSection)
 	write("WARP", "[SplitWire]\nProxy = 1080\n"+config.ExampleSection)
 	write("home", config.ExampleSection)
+	homePath := filepath.Join(userconfDir(t), "home.conf")
+	if b, err := os.ReadFile(homePath); err == nil {
+		os.WriteFile(homePath, []byte(strings.Replace(string(b), "[Interface]\n", "[Interface]\nPostUp = route add 10.0.0.0 mask 255.0.0.0 10.64.0.1\n", 1)), 0o600)
+	}
 	dir, _ := userconf.Dir()
 	os.WriteFile(filepath.Join(dir, "lab.conf"), []byte("[Interface]\nPrivateKey = "+key()+
 		"\nAddress = 10.9.0.2/32\nDNS = 10.9.0.1, lab.example\n\n[Peer]\nPublicKey = "+key()+
-		"\nAllowedIPs = 10.9.0.0/16\nEndpoint = 198.51.100.4:51820\n"), 0o600)
+		"\nAllowedIPs = 10.9.0.0/16\nEndpoint = 198.51.100.4:51820\n\n[Peer]\nPublicKey = "+key()+
+		"\nAllowedIPs = 10.10.0.0/16\nEndpoint = lab2.example:51820\nPersistentKeepalive = 25\n"), 0o600)
 	os.WriteFile(filepath.Join(dir, "broken.conf"), []byte("[Interface]\nPrivateKey = nope\n"), 0o600)
 
 	a := newApp()
@@ -83,7 +89,8 @@ func TestWindowShots(t *testing.T) {
 		rx += uint64(400e3 + 300e3*math.Sin(float64(i)/7))
 		tx += uint64(40e3 + 30e3*math.Cos(float64(i)/5))
 		for _, tn := range []*ipc.Tunnel{&office, &warpT} {
-			tn.Peers = []stats.Peer{{LastHandshake: now.Add(-12 * time.Second), RxBytes: rx, TxBytes: tx}}
+			key := a.files[tn.Name].cfg.WG.Peers[0].PublicKey
+			tn.Peers = []stats.Peer{{PublicKey: key.String(), LastHandshake: now.Add(-12 * time.Second), RxBytes: rx, TxBytes: tx}}
 		}
 		a.status = ipc.Status{Tunnels: []ipc.Tunnel{office, warpT}}
 		tr := a.traffic["Office"]
@@ -108,6 +115,19 @@ func TestWindowShots(t *testing.T) {
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-proxy.png"))
 		w.showTab(tabDetails)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-details.png"))
+		probe := probeResult{name: "Office", addr: netip.MustParseAddr("203.0.113.9"), size: 1460}
+		w.det.probed <- probe
+		w.probed()
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-details-mtu.png"))
+		w.load()
+		w.f.setText(w.det.mtu.c, "1200")
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-details-error.png"))
+		w.detailsPage(true, 0)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-details-peer.png"))
+		w.command(w.det.private, bnClicked)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-details-private.png"))
+		w.load()
+		w.detailsPage(false, 0)
 		w.showTab(tabText)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-text.png"))
 		w.f.setText(w.editor, strings.Replace(windowText(w.editor.hwnd), "[Interface]", "[Interface]\r\nMTU = nope", 1))
@@ -126,6 +146,19 @@ func TestWindowShots(t *testing.T) {
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-warp-vpn.png"))
 		w.showTab(tabProxy)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-warp-proxy.png"))
+		w.pick(w.rowOf("lab"))
+		w.showTab(tabDetails)
+		w.detailsPage(true, 1)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-lab-peer.png"))
+		w.command(w.det.peerAdd, bnClicked)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-lab-new-peer.png"))
+		w.load()
+		w.detailsPage(false, 0)
+		w.pick(w.rowOf("home"))
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-home-scripts.png"))
+		w.showTab(tabText)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-home-scripts-text.png"))
+		w.showTab(tabVPN)
 		w.pick(w.rowOf("broken"))
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-broken.png"))
 		homeT := ipc.Tunnel{Name: "home", As: ipc.AsVPN, State: ipc.StateUp, ConfigHash: a.files["home"].hash, Since: now}
@@ -140,6 +173,21 @@ func TestWindowShots(t *testing.T) {
 		offscreen(p.f.hwnd)
 		shot(t, p.f.hwnd, filepath.Join(out, theme.name+"-picker.png"))
 		procDestroyWindow.Call(p.f.hwnd)
+		// The smallest window, with the graph and the reconnect banner.
+		edited := office
+		edited.ConfigHash = "edited"
+		a.status = ipc.Status{Tunnels: []ipc.Tunnel{edited, warpT}}
+		w.refresh()
+		w.pick(w.rowOf("Office"))
+		w.showTab(tabDetails)
+		procSetWindowPos.Call(w.f.hwnd, 0, 0, 0, 1, 1, swpNoMove|swpNoZOrder|swpNoActivate)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-small-details.png"))
+		w.detailsPage(true, 0)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-small-details-peer.png"))
+		w.detailsPage(false, 0)
+		w.det.probed <- probe
+		w.probed()
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-small-details-mtu.png"))
 		w.f.destroyed = nil
 		procDestroyWindow.Call(w.f.hwnd)
 	}
@@ -247,4 +295,12 @@ func capture(t *testing.T, hwnd uintptr, path string) {
 	if err := png.Encode(f, img); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func userconfDir(t *testing.T) string {
+	dir, err := userconf.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

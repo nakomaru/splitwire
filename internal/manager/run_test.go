@@ -66,21 +66,12 @@ func TestConflict(t *testing.T) {
 	}
 }
 
-func TestAdapterRole(t *testing.T) {
-	if got := adapterRole(tunnelBase + "AllowedIPs = 0.0.0.0/0\n"); got != ipc.AsVPN {
-		t.Fatalf("full tunnel boots as %s", got)
-	}
-	if got := adapterRole(tunnelBase + "AllowedIPs = 0.0.0.0/0\n\n[SplitWire]\nMode = exclude\nApp = C:\\a.exe\n"); got != ipc.AsSplit {
-		t.Fatalf("exclude tunnel boots as %s", got)
-	}
-}
-
 func TestReadEntries(t *testing.T) {
 	split := tunnelBase + "AllowedIPs = 0.0.0.0/0\n\n[SplitWire]\nMode = exclude\nApp = C:\a.exe\n"
 	entries := []bootEntry{
 		{Name: "proxy", As: ipc.AsProxy, Config: tunnelBase + "AllowedIPs = 0.0.0.0/0\n"},
-		{Name: "office", As: ipc.AsVPN, Config: tunnelBase + "AllowedIPs = 10.0.0.0/8\n"},
-		{Name: "games", As: ipc.AsVPN, Config: split},
+		{Name: "office", As: ipc.AsVPN, Config: split},
+		{Name: "games", As: ipc.AsSplit, Config: split},
 	}
 	path := filepath.Join(t.TempDir(), runningFile)
 	if err := writeBoot(path, entries); err != nil {
@@ -94,8 +85,7 @@ func TestReadEntries(t *testing.T) {
 	for _, e := range got {
 		order = append(order, e.Name+"="+e.As)
 	}
-	// A saved VPN that picks apps comes back as the Split VPN, which starts
-	// first.
+	// The Split VPN starts first; a VPN whose file picks apps stays a VPN.
 	if want := "games=split office=vpn proxy=proxy"; strings.Join(order, " ") != want {
 		t.Fatalf("entries %v, want %s", order, want)
 	}

@@ -12,10 +12,10 @@ func TestSetValue(t *testing.T) {
 		want         string
 	}{
 		{"[Interface]\n", "Mode", "include", false, "[Interface]\n\n[SplitWire]\nMode = include\n"},
-		{"[Interface]\n", "KillSwitch", "auto", true, "[Interface]\n"},
-		{"[SplitWire]\nMode = include\n# AllowLAN = off\n", "AllowLAN", "on", false,
-			"[SplitWire]\nMode = include\nAllowLAN = on\n# AllowLAN = off\n"},
-		{"[SplitWire]\r\nAllowLAN = on\r\nallowlan = off\r\n", "AllowLAN", "off", true, "[SplitWire]\r\nAllowLAN = off\r\n"},
+		{"[Interface]\n", "Mode", "full", true, "[Interface]\n"},
+		{"[SplitWire]\nMode = include\n# Proxy = 1080\n", "Proxy", "1081", false,
+			"[SplitWire]\nMode = include\nProxy = 1081\n# Proxy = 1080\n"},
+		{"[SplitWire]\r\nProxy = 1080\r\nproxy = 1081\r\n", "Proxy", "1082", true, "[SplitWire]\r\nProxy = 1082\r\n"},
 		{"[SplitWire]\n# Mode = include\n", "Mode", "exclude", false, "[SplitWire]\nMode = exclude\n# Mode = include\n"},
 	}
 	for i, c := range cases {
@@ -31,10 +31,10 @@ func TestSetApps(t *testing.T) {
 		apps []string
 		want string
 	}{
-		{"[SplitWire]\nMode = include\nApp = C:\\a.exe\nKillSwitch = on\nApp = C:\\b.exe\n", []string{`C:\c.exe`},
-			"[SplitWire]\nMode = include\nApp = C:\\c.exe\nKillSwitch = on\n"},
-		{"[SplitWire]\nAllowLAN = on\nMode = exclude\n# App = C:\\x.exe\n", []string{`C:\a.exe`, `C:\b.exe`},
-			"[SplitWire]\nAllowLAN = on\nMode = exclude\nApp = C:\\a.exe\nApp = C:\\b.exe\n# App = C:\\x.exe\n"},
+		{"[SplitWire]\nMode = include\nApp = C:\\a.exe\nProxy = 1080\nApp = C:\\b.exe\n", []string{`C:\c.exe`},
+			"[SplitWire]\nMode = include\nApp = C:\\c.exe\nProxy = 1080\n"},
+		{"[SplitWire]\nProxy = 1080\nMode = exclude\n# App = C:\\x.exe\n", []string{`C:\a.exe`, `C:\b.exe`},
+			"[SplitWire]\nProxy = 1080\nMode = exclude\nApp = C:\\a.exe\nApp = C:\\b.exe\n# App = C:\\x.exe\n"},
 		{"[SplitWire]\nMode = include\nApp = C:\\a.exe\n", nil, "[SplitWire]\nMode = include\n"},
 		{"[Interface]\n", []string{`C:\a.exe`}, "[Interface]\n\n[SplitWire]\nApp = C:\\a.exe\n"},
 	}

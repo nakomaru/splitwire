@@ -124,7 +124,6 @@ type PhysicalWatcher struct {
 	tunnel   winipcfg.LUID
 	onChange func(Physical)
 
-	mu        sync.Mutex
 	last      Physical
 	callbacks []winipcfg.ChangeCallback
 	kick      chan struct{}
@@ -187,22 +186,13 @@ func (w *PhysicalWatcher) loop() {
 			return
 		case <-w.kick:
 			p := PhysicalLinks(w.tunnel)
-			w.mu.Lock()
 			changed := p != w.last
 			w.last = p
-			w.mu.Unlock()
 			if changed {
 				w.onChange(p)
 			}
 		}
 	}
-}
-
-// Current returns the last reported links.
-func (w *PhysicalWatcher) Current() Physical {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.last
 }
 
 // Close stops the watcher and waits for a running onChange to return.

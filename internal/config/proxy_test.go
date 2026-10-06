@@ -3,7 +3,7 @@ package config
 import "testing"
 
 func TestParseProxy(t *testing.T) {
-	c, err := Parse(base+"\n[SplitWire]\nProxy = 1081\nProxyVia = vpn\n", "warp")
+	c, err := Parse(base+"\n[SplitWire]\nProxy = 1081\n", "warp")
 	if err != nil {
 		t.Fatal(err)
 	}

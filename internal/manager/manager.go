@@ -17,8 +17,6 @@ import (
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/ipc"
-	"splitwire/internal/shortcut"
-	"splitwire/internal/tray"
 )
 
 // ServiceName is the manager service.
@@ -40,12 +38,6 @@ const bootFile = "boot.json"
 const (
 	runningFile = "running.json"
 	resumeFile  = "resume"
-)
-
-// Files of the single boot tunnel that bootFile replaces.
-const (
-	legacyBootName = "autostart.name"
-	legacyBootConf = "autostart.conf"
 )
 
 // Choice is an install setting: kept as it is, turned on or turned off.
@@ -84,13 +76,6 @@ func Install(opts Options) error {
 	exe, err := bootstrap.InstallExe()
 	if err != nil {
 		return err
-	}
-	bootstrap.RemoveLegacyTray()
-	// The app keeps its shortcut in the user's own Start menu.
-	if lnk, err := shortcut.CommonStartMenu(tray.StartMenuName); err == nil {
-		if os.Remove(lnk) == nil {
-			log.Printf("Removed the all-users Start menu shortcut")
-		}
 	}
 	if dir, err := bootstrap.ConfigsDir(); err == nil && opts.Boot != Keep {
 		path := filepath.Join(dir, bootFile)
@@ -206,7 +191,7 @@ func Uninstall() error {
 		return err
 	}
 	if dir, err := bootstrap.ConfigsDir(); err == nil {
-		for _, f := range []string{bootFile, runningFile, resumeFile, usersFile, legacyBootName, legacyBootConf} {
+		for _, f := range []string{bootFile, runningFile, resumeFile, usersFile} {
 			os.Remove(filepath.Join(dir, f))
 		}
 	}
@@ -214,17 +199,22 @@ func Uninstall() error {
 	return nil
 }
 
-// Installed reports whether the manager service exists.
+// Installed reports whether the manager service exists. It asks only for
+// the right to query the service, which every user has.
 func Installed() bool {
-	m, err := mgr.Connect()
+	m, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return false
 	}
-	defer m.Disconnect()
-	s, err := m.OpenService(ServiceName)
+	defer windows.CloseServiceHandle(m)
+	name, err := windows.UTF16PtrFromString(ServiceName)
 	if err != nil {
 		return false
 	}
-	s.Close()
+	s, err := windows.OpenService(m, name, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return false
+	}
+	windows.CloseServiceHandle(s)
 	return true
 }
