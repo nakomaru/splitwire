@@ -52,26 +52,26 @@ var (
 	procFwpmTransactionCommit0    = modfwpuclnt.NewProc("FwpmTransactionCommit0")
 )
 
-func fwpmEngineClose0(engineHandle uintptr) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmEngineClose0.Addr(), uintptr(engineHandle))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmEngineClose0(engineHandle uintptr) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmEngineClose0.Addr(), uintptr(engineHandle))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmEngineOpen0(serverName *uint16, authnService wtRpcCAuthN, authIdentity *uintptr, session *wtFwpmSession0, engineHandle unsafe.Pointer) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmEngineOpen0.Addr(), uintptr(unsafe.Pointer(serverName)), uintptr(authnService), uintptr(unsafe.Pointer(authIdentity)), uintptr(unsafe.Pointer(session)), uintptr(engineHandle))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmEngineOpen0(serverName *uint16, authnService wtRpcCAuthN, authIdentity *uintptr, session *wtFwpmSession0, engineHandle unsafe.Pointer) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmEngineOpen0.Addr(), uintptr(unsafe.Pointer(serverName)), uintptr(authnService), uintptr(unsafe.Pointer(authIdentity)), uintptr(unsafe.Pointer(session)), uintptr(engineHandle))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmFilterAdd0(engineHandle uintptr, filter *wtFwpmFilter0, sd uintptr, id *uint64) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmFilterAdd0.Addr(), uintptr(engineHandle), uintptr(unsafe.Pointer(filter)), uintptr(sd), uintptr(unsafe.Pointer(id)))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmFilterAdd0(engineHandle uintptr, filter *wtFwpmFilter0, sd uintptr, id *uint64) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmFilterAdd0.Addr(), uintptr(engineHandle), uintptr(unsafe.Pointer(filter)), uintptr(sd), uintptr(unsafe.Pointer(id)))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
@@ -81,50 +81,50 @@ func fwpmFreeMemory0(p unsafe.Pointer) {
 	return
 }
 
-func fwpmGetAppIdFromFileName0(fileName *uint16, appID unsafe.Pointer) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmGetAppIdFromFileName0.Addr(), uintptr(unsafe.Pointer(fileName)), uintptr(appID))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmGetAppIdFromFileName0(fileName *uint16, appID unsafe.Pointer) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmGetAppIdFromFileName0.Addr(), uintptr(unsafe.Pointer(fileName)), uintptr(appID))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmProviderAdd0(engineHandle uintptr, provider *wtFwpmProvider0, sd uintptr) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmProviderAdd0.Addr(), uintptr(engineHandle), uintptr(unsafe.Pointer(provider)), uintptr(sd))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmProviderAdd0(engineHandle uintptr, provider *wtFwpmProvider0, sd uintptr) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmProviderAdd0.Addr(), uintptr(engineHandle), uintptr(unsafe.Pointer(provider)), uintptr(sd))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmSubLayerAdd0(engineHandle uintptr, subLayer *wtFwpmSublayer0, sd uintptr) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmSubLayerAdd0.Addr(), uintptr(engineHandle), uintptr(unsafe.Pointer(subLayer)), uintptr(sd))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmSubLayerAdd0(engineHandle uintptr, subLayer *wtFwpmSublayer0, sd uintptr) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmSubLayerAdd0.Addr(), uintptr(engineHandle), uintptr(unsafe.Pointer(subLayer)), uintptr(sd))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmTransactionAbort0(engineHandle uintptr) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmTransactionAbort0.Addr(), uintptr(engineHandle))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmTransactionAbort0(engineHandle uintptr) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmTransactionAbort0.Addr(), uintptr(engineHandle))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmTransactionBegin0(engineHandle uintptr, flags uint32) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmTransactionBegin0.Addr(), uintptr(engineHandle), uintptr(flags))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmTransactionBegin0(engineHandle uintptr, flags uint32) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmTransactionBegin0.Addr(), uintptr(engineHandle), uintptr(flags))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
 
-func fwpmTransactionCommit0(engineHandle uintptr) (err error) {
-	r1, _, e1 := syscall.SyscallN(procFwpmTransactionCommit0.Addr(), uintptr(engineHandle))
-	if r1 != 0 {
-		err = errnoErr(e1)
+func fwpmTransactionCommit0(engineHandle uintptr) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFwpmTransactionCommit0.Addr(), uintptr(engineHandle))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }
