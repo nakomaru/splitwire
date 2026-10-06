@@ -37,25 +37,6 @@ func (m Mode) String() string {
 	return "full"
 }
 
-// Switch is a setting that may be left to a mode-dependent default.
-type Switch int
-
-const (
-	Auto Switch = iota
-	On
-	Off
-)
-
-func (s Switch) String() string {
-	switch s {
-	case On:
-		return "on"
-	case Off:
-		return "off"
-	}
-	return "auto"
-}
-
 // ProxyHost is the address a proxy given only a port listens on.
 var ProxyHost = netip.AddrFrom4([4]byte{127, 0, 0, 1})
 
@@ -85,14 +66,6 @@ type Config struct {
 	// Apps are App entries as written: absolute paths, optionally with
 	// %VARIABLE% references and glob patterns.
 	Apps []string
-	// KillSwitch blocks traffic that bypasses the tunnel in full and exclude
-	// modes. Auto means on when AllowedIPs contain a default route.
-	KillSwitch Switch
-	// AllowLAN exempts private networks from the kill switch.
-	AllowLAN bool
-	// StrictDNS limits DNS (port 53) to the tunnel's DNS servers whenever
-	// [Interface] sets DNS.
-	StrictDNS bool
 
 	// Proxy is the address the tunnel's SOCKS5 and HTTP proxy listens on
 	// when it runs as a proxy. It is invalid when unset.
@@ -116,7 +89,7 @@ func Load(path string) (*Config, error) {
 // Parse parses configuration text for the tunnel called name.
 func Parse(text, name string) (*Config, error) {
 	text = strings.TrimPrefix(text, string(rune(0xFEFF)))
-	c := &Config{StrictDNS: true}
+	c := &Config{}
 
 	var wgLines []string
 	inSection := false
@@ -161,16 +134,6 @@ func Parse(text, name string) (*Config, error) {
 	return c, nil
 }
 
-func parseBool(v string) (bool, error) {
-	switch strings.ToLower(v) {
-	case "on", "true", "yes", "1":
-		return true, nil
-	case "off", "false", "no", "0":
-		return false, nil
-	}
-	return false, fmt.Errorf("%q is not on or off", v)
-}
-
 func (c *Config) set(key, val string) error {
 	switch key {
 	case "mode":
@@ -190,28 +153,9 @@ func (c *Config) set(key, val string) error {
 			return fmt.Errorf("App needs a path")
 		}
 		c.Apps = append(c.Apps, val)
-	case "killswitch":
-		if strings.EqualFold(val, "auto") {
-			c.KillSwitch = Auto
-			return nil
-		}
-		b, err := parseBool(val)
-		if err != nil {
-			return fmt.Errorf("KillSwitch: %w", err)
-		}
-		c.KillSwitch = map[bool]Switch{true: On, false: Off}[b]
-	case "allowlan":
-		b, err := parseBool(val)
-		if err != nil {
-			return fmt.Errorf("AllowLAN: %w", err)
-		}
-		c.AllowLAN = b
-	case "strictdns":
-		b, err := parseBool(val)
-		if err != nil {
-			return fmt.Errorf("StrictDNS: %w", err)
-		}
-		c.StrictDNS = b
+	case "killswitch", "allowlan", "strictdns":
+		// Accepted and ignored: the kill switch, its local network exception
+		// and the DNS restriction are machine-wide settings.
 	case "proxy":
 		ap, err := ParseProxy(val)
 		if err != nil {
@@ -276,20 +220,6 @@ func (c *Config) HasDefaultRoute() bool {
 		}
 	}
 	return false
-}
-
-// KillSwitchOn resolves KillSwitch for the full and exclude modes.
-func (c *Config) KillSwitchOn() bool {
-	if c.Mode == ModeInclude || c.WG.Interface.TableOff {
-		return false
-	}
-	switch c.KillSwitch {
-	case On:
-		return true
-	case Off:
-		return false
-	}
-	return c.HasDefaultRoute()
 }
 
 func expandEnv(s string) (string, error) {
@@ -371,9 +301,6 @@ func (c *Config) WithExpandedApps() (string, error) {
 	for _, p := range paths {
 		fmt.Fprintf(&b, "App = %s\n", p)
 	}
-	fmt.Fprintf(&b, "KillSwitch = %s\n", c.KillSwitch)
-	fmt.Fprintf(&b, "AllowLAN = %t\n", c.AllowLAN)
-	fmt.Fprintf(&b, "StrictDNS = %t\n", c.StrictDNS)
 	if c.Proxy.IsValid() {
 		fmt.Fprintf(&b, "Proxy = %s\n", c.Proxy)
 	}

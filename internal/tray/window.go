@@ -99,7 +99,6 @@ type window struct {
 
 	hSplit, splitOff, splitInclude, splitExclude  *control
 	modeNote, appList, appAdd, appRemove, appHint *control
-	kill, lan, dns                                *control
 
 	portLabel, port, portNote, copyAddr, proxyHint *control
 
@@ -107,6 +106,8 @@ type window struct {
 	hPeer, endLabel, endpoint, allowLabel, allowed                      *control
 
 	editor, parse, revert, save *control
+
+	ov overviewControls
 }
 
 // windowCreating marks a.win while the window thread starts.
@@ -225,9 +226,6 @@ func newWindow(a *app) *window {
 	w.appAdd = f.add(&control{kind: kindButton, text: "Add apps", glyph: glyphAdd})
 	w.appRemove = f.add(&control{kind: kindButton, text: "Remove", glyph: glyphDelete})
 	w.appHint = f.add(&control{kind: kindLabel, color: labelSubtle})
-	w.kill = f.add(&control{kind: kindCheck, text: "Kill switch"})
-	w.lan = f.add(&control{kind: kindCheck, text: "Allow the local network"})
-	w.dns = f.add(&control{kind: kindCheck, text: "Use only the tunnel's DNS servers"})
 
 	w.portLabel = f.add(&control{kind: kindLabel, text: "Port"})
 	w.port = f.addEdit(&control{}, esNumber)
@@ -251,6 +249,8 @@ func newWindow(a *app) *window {
 	w.endpoint = f.add(&control{kind: kindLabel})
 	w.allowLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Allowed IPs"})
 	w.allowed = f.add(&control{kind: kindLabel})
+
+	w.addOverview(f)
 
 	w.editor = f.addRich(&control{font: fontMono}, esMultiline|esAutoVScroll|wsVScroll|wsHScroll|esWantReturn|esNoHideSel)
 	w.parse = f.add(&control{kind: kindLabel})
@@ -316,6 +316,7 @@ func (w *window) layout(cw, ch int32) {
 	y += bh + s(4)
 	f.place(w.status, rect{x0, y, x1, y + s(20)})
 	y += s(28)
+	w.layoutOverview(x0, x1, y+s(4), by+bh)
 	if !w.reconnect.hidden {
 		rw := f.buttonWidth(w.reconnect)
 		f.place(w.reconnect, rect{x1 - rw, y, x1, y + bh})
@@ -351,7 +352,7 @@ func (w *window) layout(cw, ch int32) {
 }
 
 // layoutVPN places the VPN tab between y and bottom: split tunneling at
-// the top, the apps in the middle, and the protections at the bottom.
+// the top and the apps below.
 func (w *window) layoutVPN(x0, x1, y, bottom int32) {
 	f := w.f
 	s := f.px
@@ -372,12 +373,6 @@ func (w *window) layoutVPN(x0, x1, y, bottom int32) {
 	f.place(w.modeNote, rect{x0, y, x1, y + s(20)})
 	y += s(20) + s(10)
 
-	f.place(w.dns, rect{x0, bottom - s(28), x0 + f.toggleWidth(w.dns), bottom})
-	bottom -= s(30)
-	kw := f.toggleWidth(w.kill)
-	f.place(w.kill, rect{x0, bottom - s(28), x0 + kw, bottom})
-	f.place(w.lan, rect{x0 + kw + s(24), bottom - s(28), x0 + kw + s(24) + f.toggleWidth(w.lan), bottom})
-	bottom -= s(30) + s(12)
 	aw := f.buttonWidth(w.appAdd)
 	rw := f.buttonWidth(w.appRemove)
 	f.place(w.appAdd, rect{x0, bottom - bh, x0 + aw, bottom})
@@ -459,7 +454,7 @@ func (w *window) refresh() {
 	w.a.mu.Unlock()
 
 	if old.files == nil || strings.Join(old.names, "\x00") != strings.Join(w.snap.names, "\x00") {
-		w.f.listSet(w.list, w.snap.names)
+		w.f.listSet(w.list, append([]string{"Overview"}, w.snap.names...))
 	} else {
 		w.f.invalidate(w.list)
 	}
@@ -469,15 +464,8 @@ func (w *window) refresh() {
 	}
 	if !w.has(name) {
 		name = ""
-		if len(w.snap.names) > 0 {
-			name = w.snap.names[0]
-		}
 	}
-	for i, n := range w.snap.names {
-		if n == name {
-			w.f.listSetCurSel(w.list, i)
-		}
-	}
+	w.f.listSetCurSel(w.list, w.rowOf(name))
 	if name != w.sel {
 		w.sel = name
 		w.load()
@@ -488,6 +476,28 @@ func (w *window) refresh() {
 		}
 	}
 	w.update()
+}
+
+// overviewRow is the tunnel list's first row, the Overview page, which shows
+// whenever no tunnel is selected.
+const overviewRow = 0
+
+// rowOf is the tunnel list row of the named tunnel, or the Overview's for "".
+func (w *window) rowOf(name string) int {
+	for i, n := range w.snap.names {
+		if n == name {
+			return i + 1
+		}
+	}
+	return overviewRow
+}
+
+// nameAt is the tunnel at a tunnel list row, or "" for the Overview.
+func (w *window) nameAt(row int) string {
+	if row <= overviewRow || row > len(w.snap.names) {
+		return ""
+	}
+	return w.snap.names[row-1]
 }
 
 func (w *window) has(name string) bool {
@@ -588,7 +598,7 @@ func (w *window) update() {
 
 	title := w.sel
 	if !hasSel {
-		title = "No tunnel"
+		title = "Overview"
 	}
 	layoutChanged := w.title.text != title
 	f.setText(w.title, title)
@@ -596,7 +606,12 @@ func (w *window) update() {
 	if t != nil && t.State == ipc.StateError || file.error != "" && t == nil {
 		w.status.color = labelError
 	}
-	f.setText(w.status, w.statusText(t, file))
+	if hasSel {
+		f.setText(w.status, w.statusText(t, file))
+	} else {
+		f.setText(w.status, w.overviewStatus())
+		w.updateOverview()
+	}
 	f.show(w.rename, hasSel)
 	f.enable(w.del, hasSel)
 
@@ -678,45 +693,6 @@ func (w *window) updateVPN(c *config.Config) {
 	}
 	f.setText(w.appHint, hint)
 	f.enable(w.appRemove, len(f.listSelected(w.appList)) > 0)
-
-	// Settings without an effect stay in place, grayed out, with tooltips
-	// saying why.
-	tip := func(c *control, text string) {
-		if c.tip != text {
-			f.setTip(c, text)
-		}
-	}
-	killTip := "Blocks traffic outside the tunnel while it runs, so nothing leaks if the tunnel drops. " +
-		"Excluded apps stay allowed. With AllowedIPs covering every address, it starts out on."
-	killOK := true
-	switch {
-	case c.Mode == config.ModeInclude:
-		killTip = "Off with Include: only the listed apps use the VPN and other apps connect directly, " +
-			"so there is nothing for a kill switch to block."
-		killOK = false
-	case c.WG.Interface.TableOff:
-		killTip = "Off with Table = off, which leaves the tunnel's routes to you."
-		killOK = false
-	}
-	lanTip := "Lets apps reach private addresses, such as the router, printers and other computers at " +
-		"home, past the kill switch."
-	if !c.KillSwitchOn() {
-		lanTip = "Applies while the kill switch is on. " + lanTip
-	}
-	dnsTip := "Blocks DNS servers other than the tunnel's, so name lookups stay inside the tunnel."
-	dnsOK := len(c.WG.Interface.DNS) > 0
-	if !dnsOK {
-		dnsTip = "Needs DNS servers in the tunnel's [Interface]; without them, lookups use the system's servers."
-	}
-	f.setOn(w.kill, c.KillSwitchOn())
-	f.enable(w.kill, killOK)
-	tip(w.kill, killTip)
-	f.setOn(w.lan, c.AllowLAN)
-	f.enable(w.lan, c.KillSwitchOn())
-	tip(w.lan, lanTip)
-	f.setOn(w.dns, c.StrictDNS && dnsOK)
-	f.enable(w.dns, dnsOK)
-	tip(w.dns, dnsTip)
 }
 
 // updateProxy shows the tunnel's settings as a proxy.
@@ -792,9 +768,6 @@ func (w *window) statusText(t *ipc.Tunnel, file tunnelFile) string {
 	case linkFailed:
 		return "The SplitWire service is unavailable: " + w.snap.linkErr
 	}
-	if w.sel == "" {
-		return "Add a tunnel to get started."
-	}
 	if t == nil {
 		if file.error != "" {
 			return "Off. It has a problem; see below."
@@ -850,9 +823,6 @@ func (w *window) showTab(i int) {
 		w.appList, w.appAdd, w.appRemove, w.appHint} {
 		f.show(c, vpn)
 	}
-	f.show(w.kill, vpn)
-	f.show(w.lan, vpn)
-	f.show(w.dns, vpn)
 	for _, c := range []*control{w.portLabel, w.port, w.portNote, w.copyAddr, w.proxyHint} {
 		f.show(c, formOK && i == tabProxy)
 	}
@@ -863,6 +833,7 @@ func (w *window) showTab(i int) {
 	for _, c := range []*control{w.editor, w.parse, w.revert, w.save} {
 		f.show(c, w.sel != "" && i == tabText)
 	}
+	w.showOverview(w.sel == "")
 }
 
 // ---- input ----
@@ -890,7 +861,7 @@ func (w *window) command(c *control, code uint16) {
 		}
 		return
 	}
-	if code != bnClicked {
+	if w.overviewCommand(c, code) || code != bnClicked {
 		return
 	}
 	name := w.sel
@@ -927,12 +898,6 @@ func (w *window) command(c *control, code uint16) {
 		w.addApps()
 	case w.appRemove:
 		w.removeApps()
-	case w.kill:
-		w.setValue("KillSwitch", onOff(!c.on), false)
-	case w.lan:
-		w.setValue("AllowLAN", onOff(!c.on), c.on)
-	case w.dns:
-		w.setValue("StrictDNS", onOff(!c.on), !c.on)
 	case w.copyAddr:
 		if w.cfg != nil && w.cfg.Proxy.IsValid() {
 			w.copy(w.cfg.Proxy.String())
@@ -976,7 +941,7 @@ func (w *window) contextMenu(c *control, x, y int32) {
 		return
 	}
 	i := w.f.listItemAt(c, x, y)
-	if i >= 0 && i < len(w.snap.names) && w.snap.names[i] != w.sel {
+	if i >= 0 && i <= len(w.snap.names) && i != w.rowOf(w.sel) {
 		w.f.listSetCurSel(w.list, i)
 		w.pick(i)
 	}
@@ -1022,21 +987,17 @@ func (w *window) editorMenu(x, y int32) {
 	}, x, y)
 }
 
-// pick selects row i of the tunnel list, unless unsaved text keeps the
-// current tunnel.
+// pick selects row i of the tunnel list, the Overview or a tunnel, unless
+// unsaved text keeps the current tunnel.
 func (w *window) pick(i int) {
-	if i < 0 || i >= len(w.snap.names) || w.snap.names[i] == w.sel {
+	if i < 0 || i > len(w.snap.names) || i == w.rowOf(w.sel) {
 		return
 	}
 	if !w.confirmLeave() {
-		for j, n := range w.snap.names {
-			if n == w.sel {
-				w.f.listSetCurSel(w.list, j)
-			}
-		}
+		w.f.listSetCurSel(w.list, w.rowOf(w.sel))
 		return
 	}
-	w.sel = w.snap.names[i]
+	w.sel = w.nameAt(i)
 	w.f.listSetCurSel(w.list, i)
 	w.load()
 	w.update()

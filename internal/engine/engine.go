@@ -37,26 +37,81 @@ func instanceMutex(name string) string {
 	return `Global\splitwire-tunnel-` + hex.EncodeToString(sum[:8])
 }
 
-// shared is the state the tunnels of one process share. The process holds
-// one firewall session, so the first tunnel that wants a kill switch or DNS
-// restriction owns it, and every tunnel's permits let it through.
-var shared struct {
-	mu sync.Mutex
-	// firewallOwner names the tunnel whose firewall is in force.
-	firewallOwner string
+// shared is the state the tunnels of one process share: one set of
+// blocking filters, the kill switch and DNS restriction, which follows the
+// settings and the running tunnels, and which each tunnel's permits let it
+// through.
+var shared = struct {
+	mu       sync.Mutex
+	settings settings.Settings
+	// active are the tunnels whose permits are in place.
+	active  map[*Tunnel]bool
+	blocker *firewall.Blocker
+	applied firewall.Options
 	// live counts the running tunnels; the last one down removes the
 	// firewall sublayers.
 	live int
+}{settings: settings.Defaults(), active: make(map[*Tunnel]bool)}
+
+// SetSettings applies the machine-wide settings to the process's tunnels.
+func SetSettings(s settings.Settings) error {
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	shared.settings = s
+	return applyBlockerLocked()
+}
+
+// applyBlockerLocked installs the blocking filters the settings and the
+// active tunnels call for. The kill switch holds while a tunnel carries
+// every address; the DNS restriction while a tunnel sets DNS servers. New
+// filters go in before the old ones go, so nothing slips through between.
+func applyBlockerLocked() error {
+	opts := firewall.Options{AllowLAN: shared.settings.AllowLAN}
+	for t := range shared.active {
+		c := t.cfg
+		if c.WG.Interface.TableOff {
+			continue
+		}
+		if shared.settings.KillSwitch && c.Mode != config.ModeInclude && c.HasDefaultRoute() {
+			opts.KillSwitch = true
+		}
+		if shared.settings.StrictDNS && len(c.WG.Interface.DNS) > 0 {
+			opts.BlockDNS = true
+		}
+	}
+	if !opts.KillSwitch {
+		opts.AllowLAN = false
+	}
+	if opts == shared.applied {
+		return nil
+	}
+	b, err := firewall.Block(opts)
+	if err != nil {
+		return fmt.Errorf("firewall: %w", err)
+	}
+	shared.blocker.Close()
+	shared.blocker, shared.applied = b, opts
+	log.Printf("Firewall: kill switch %s, DNS restricted to the tunnels' servers %s", onOff(opts.KillSwitch), onOff(opts.BlockDNS))
+	if opts.KillSwitch {
+		log.Printf("Firewall: local network %s", map[bool]string{true: "allowed", false: "blocked"}[opts.AllowLAN])
+	}
+	return nil
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 // Tunnel is a running tunnel.
 type Tunnel struct {
-	cfg      *config.Config
-	adapter  *driver.Adapter
-	luid     winipcfg.LUID
-	mutex    windows.Handle
-	firewall bool
-	permits  *firewall.Permits
+	cfg     *config.Config
+	adapter *driver.Adapter
+	luid    winipcfg.LUID
+	mutex   windows.Handle
+	permits *firewall.Permits
 	// endpoints are the peers' resolved endpoints.
 	endpoints []netip.AddrPort
 	// releaseEndpoints gives back the peer endpoints' routes.
@@ -85,10 +140,14 @@ func adapterGUID(name string) *windows.GUID {
 	return &g
 }
 
-// Run brings the tunnel up, with the saved Always direct list, and keeps it
-// up until ctx ends.
+// Run brings the tunnel up, with the saved settings, and keeps it up until
+// ctx ends.
 func Run(ctx context.Context, c *config.Config) error {
-	t, err := Up(ctx, c, settings.LoadDirect())
+	s := settings.LoadOrDefaults()
+	if err := SetSettings(s); err != nil {
+		return err
+	}
+	t, err := Up(ctx, c, s.DirectPrefixes())
 	if err != nil {
 		return err
 	}
@@ -192,7 +251,11 @@ func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (t *Tunnel
 	if t.permits, err = firewall.Permit(uint64(t.luid), endpoints, c.WG.Interface.DNS, direct); err != nil {
 		return nil, fmt.Errorf("permit the tunnel in the firewall: %w", err)
 	}
-	if err := t.enableFirewall(endpoints); err != nil {
+	shared.mu.Lock()
+	shared.active[t] = true
+	err = applyBlockerLocked()
+	shared.mu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 
@@ -261,37 +324,6 @@ func peerEndpoints(c *config.Config) ([]netip.AddrPort, error) {
 		eps = append(eps, netip.AddrPortFrom(a, p.Endpoint.Port))
 	}
 	return eps, nil
-}
-
-// enableFirewall turns on the tunnel's kill switch and DNS restriction,
-// unless another tunnel of the process already holds the firewall.
-func (t *Tunnel) enableFirewall(endpoints []netip.AddrPort) error {
-	c := t.cfg
-	opts := firewall.Options{
-		TunnelLUID: uint64(t.luid),
-		KillSwitch: c.KillSwitchOn(),
-		AllowLAN:   c.AllowLAN,
-		Endpoints:  endpoints,
-	}
-	if c.StrictDNS && !c.WG.Interface.TableOff {
-		opts.DNSServers = c.WG.Interface.DNS
-	}
-	if !opts.KillSwitch && len(opts.DNSServers) == 0 {
-		return nil
-	}
-	shared.mu.Lock()
-	defer shared.mu.Unlock()
-	if shared.firewallOwner != "" {
-		log.Printf("The kill switch and DNS restriction stay %s's; %s runs without its own", shared.firewallOwner, c.WG.Name)
-		return nil
-	}
-	log.Printf("Enabling firewall (kill switch %t, LAN %t, DNS restricted to %v)", opts.KillSwitch, opts.AllowLAN, opts.DNSServers)
-	if err := firewall.EnableFirewall(opts); err != nil {
-		return fmt.Errorf("enable firewall: %w", err)
-	}
-	t.firewall = true
-	shared.firewallOwner = c.WG.Name
-	return nil
 }
 
 func resolveApps(c *config.Config) ([]string, error) {
@@ -451,13 +483,14 @@ func (t *Tunnel) Down() {
 		cb.Unregister()
 	}
 	t.callbacks = nil
-	if t.firewall {
-		firewall.DisableFirewall()
-		t.firewall = false
-		shared.mu.Lock()
-		shared.firewallOwner = ""
-		shared.mu.Unlock()
+	shared.mu.Lock()
+	if shared.active[t] {
+		delete(shared.active, t)
+		if err := applyBlockerLocked(); err != nil {
+			log.Printf("Warning: %v", err)
+		}
 	}
+	shared.mu.Unlock()
 	t.permits.Close()
 	t.permits = nil
 	if t.adapter != nil {
@@ -473,6 +506,10 @@ func (t *Tunnel) Down() {
 		shared.mu.Lock()
 		shared.live--
 		last := shared.live == 0
+		if last {
+			shared.blocker.Close()
+			shared.blocker, shared.applied = nil, firewall.Options{}
+		}
 		shared.mu.Unlock()
 		if last {
 			if err := firewall.RemoveSublayers(); err != nil {

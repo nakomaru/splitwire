@@ -553,20 +553,8 @@ func check(path string) error {
 		}
 		fmt.Printf("Peer        %s at %s\n", p.PublicKey.String(), ep)
 	}
-	if c.Mode == config.ModeInclude {
-		fmt.Printf("Kill switch listed apps only (always on in include mode)\n")
-	} else {
-		fmt.Printf("Kill switch %s\n", onOff(c.KillSwitchOn()))
-	}
-	if c.KillSwitchOn() {
-		fmt.Printf("LAN         %s\n", map[bool]string{true: "allowed", false: "blocked"}[c.AllowLAN])
-	}
 	if len(c.WG.Interface.DNS) > 0 {
-		strict := ""
-		if c.StrictDNS {
-			strict = ", other DNS servers blocked"
-		}
-		fmt.Printf("DNS         %v for the whole system%s\n", c.WG.Interface.DNS, strict)
+		fmt.Printf("DNS         %v for the whole system\n", c.WG.Interface.DNS)
 	} else {
 		fmt.Printf("DNS         system settings\n")
 	}
@@ -628,13 +616,6 @@ func describe(t ipc.Tunnel) string {
 		return fmt.Sprintf("Split VPN, mode %s, %d apps", t.Mode, t.Apps)
 	}
 	return "VPN"
-}
-
-func onOff(b bool) string {
-	if b {
-		return "on"
-	}
-	return "off"
 }
 
 func apps(filter string) error {

@@ -39,10 +39,19 @@ tunnel, or starts an empty one. Split tunneling settings go in a
 |---|---|---|
 | `Mode` | `include` or `exclude`, for the Split VPN | `full`: not a Split VPN |
 | `App` | path to an app; `%VAR%` and `*` globs allowed; repeatable | |
-| `KillSwitch` | `auto`, `on`, `off` | `auto`: on with a default route |
-| `AllowLAN` | `on`, `off`: exempt the LAN from the kill switch | `off` |
-| `StrictDNS` | `on`, `off`: block DNS servers other than the tunnel's | `on` |
 | `Proxy` | port, or address and port | picked from 1080 up |
+
+## Overview
+
+The window's Overview, at the top of the tunnel list, shows where traffic
+goes, and holds the settings for every tunnel:
+
+- **Kill switch**: while a VPN carries every address, blocks traffic outside
+  the tunnels, so nothing leaks if it drops. On at first.
+- **Allow the local network**: lets the kill switch pass the LAN.
+- **Use only the tunnels' DNS servers**: while a tunnel sets DNS servers,
+  blocks every other DNS server. On at first.
+- **Always direct**: see below.
 
 ## Proxies
 
@@ -53,11 +62,12 @@ DNS when using SOCKS v5".
 
 ## Always direct
 
-Destinations on the Always direct list never go through a VPN, whatever
-ranges the VPNs carry: for example, an office VPN server that another VPN
-client reaches from a virtual machine. List address ranges, addresses or
-host names; names are looked up when a tunnel connects. An include mode
-Split VPN's apps still reach them through the Split VPN.
+Destinations on the Always direct list, in the Overview, never go through a
+VPN, whatever ranges the VPNs carry: for example, an office VPN server that
+another VPN client reaches from a virtual machine. List address ranges,
+addresses or host names; names are looked up when a tunnel connects. An
+include mode Split VPN's apps still reach them through the Split VPN. From
+a shell:
 
 ```
 splitwire direct add 203.0.113.0/24 vpn.office.example
@@ -84,8 +94,6 @@ SplitWire updates itself, and installs only updates signed by its author.
 - Two VPNs cannot carry the same range.
 - A tunnel's `DNS` servers resolve names for every app, including the ones
   split tunneling leaves out.
-- One kill switch and DNS restriction apply at a time: those of the tunnel
-  that turned them on first, until it stops.
 - Apps keep existing connections' routes, so start the tunnel first.
 - Proxies work only for apps with proxy settings, and take no password.
 - The Split VPN cannot run while the Mullvad VPN app runs: the split tunnel

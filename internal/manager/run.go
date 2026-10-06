@@ -103,11 +103,11 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 	}
 	users := Users()
 	m.status.Users = len(users)
-	if s, err := settings.Load(); err != nil {
+	set := settings.LoadOrDefaults()
+	m.status.Settings = set
+	m.direct = set.DirectPrefixes()
+	if err := engine.SetSettings(set); err != nil {
 		log.Printf("Settings: %v", err)
-	} else {
-		m.status.Settings = s
-		m.direct = s.DirectPrefixes()
 	}
 	ln, err := ipc.Listen(users)
 	if err != nil {
@@ -456,9 +456,10 @@ func (m *manager) setSettings(s settings.Settings) error {
 		return err
 	}
 	m.publish(func(st *ipc.Status) { st.Settings = s })
-	log.Printf("Always direct: %v", s.Direct)
+	log.Printf("Settings: kill switch %t, local network %t, strict DNS %t, Always direct %v",
+		s.KillSwitch, s.AllowLAN, s.StrictDNS, s.Direct)
 	m.refreshDirectLocked()
-	return nil
+	return engine.SetSettings(s)
 }
 
 // refreshDirectLocked resolves the Always direct list again and, when it

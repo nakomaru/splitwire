@@ -9,7 +9,6 @@ package firewall
 
 import (
 	"errors"
-	"net/netip"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -43,20 +42,15 @@ const (
 	sublayerWeightDNS      = ^uint16(0) - 1
 )
 
-var wfpSession uintptr
-
-// Options selects the filters EnableFirewall installs.
+// Options selects the blocking filters Block installs. Each tunnel's
+// Permits let its own traffic through them.
 type Options struct {
-	TunnelLUID uint64
-
-	// KillSwitch blocks all traffic outside the tunnel except loopback,
-	// DHCP, NDP, the peer endpoints and, with AllowLAN, private networks.
+	// KillSwitch blocks all traffic except loopback, DHCP, NDP, what Permits
+	// allow and, with AllowLAN, private networks.
 	KillSwitch bool
 	AllowLAN   bool
-	Endpoints  []netip.AddrPort
-
-	// DNSServers, when non-empty, are the only servers reachable on port 53.
-	DNSServers []netip.Addr
+	// BlockDNS blocks DNS to every server Permits do not allow.
+	BlockDNS bool
 }
 
 func openSession(flags wtFwpmSessionFlagsValue, description string) (uintptr, error) {
@@ -155,93 +149,60 @@ func RemoveSublayers() error {
 	return nil
 }
 
-// EnableFirewall installs the filters selected by opts in a dynamic session,
-// so they vanish when the process exits. EnsureSublayers must run first.
-func EnableFirewall(opts Options) error {
-	if wfpSession != 0 {
-		return errors.New("The firewall has already been enabled")
-	}
-	if !opts.KillSwitch && len(opts.DNSServers) == 0 {
-		return nil
-	}
+// Blocker holds installed blocking filters. They live in a dynamic
+// session, so Close or the process exiting removes them.
+type Blocker struct {
+	session uintptr
+}
 
-	session, err := openSession(cFWPM_SESSION_FLAG_DYNAMIC, "splitwire dynamic session")
+// Block installs the filters opts selects, or nothing when it selects
+// none. EnsureSublayers must run first.
+func Block(opts Options) (*Blocker, error) {
+	if !opts.KillSwitch && !opts.BlockDNS {
+		return nil, nil
+	}
+	session, err := openSession(cFWPM_SESSION_FLAG_DYNAMIC, "splitwire blocking filters")
 	if err != nil {
-		return wrapErr(err)
+		return nil, wrapErr(err)
 	}
-
 	baseObjects := &baseObjects{provider: ProviderKey, filters: BaselineKey, dns: DNSKey}
-
-	objectInstaller := func(session uintptr) error {
-		if len(opts.DNSServers) > 0 {
-			err := blockDNS(opts.DNSServers, session, baseObjects, 15, 14)
-			if err != nil {
+	err = runTransaction(session, func(session uintptr) error {
+		if opts.BlockDNS {
+			if err := blockDNS(nil, session, baseObjects, 15, 14); err != nil {
 				return wrapErr(err)
 			}
 		}
-
 		if !opts.KillSwitch {
 			return nil
 		}
-
-		err := permitLoopback(session, baseObjects, 13)
-		if err != nil {
-			return wrapErr(err)
-		}
-
-		err = permitTunInterface(session, baseObjects, 12, opts.TunnelLUID)
-		if err != nil {
-			return wrapErr(err)
-		}
-
-		err = permitDHCPIPv4(session, baseObjects, 12)
-		if err != nil {
-			return wrapErr(err)
-		}
-
-		err = permitDHCPIPv6(session, baseObjects, 12)
-		if err != nil {
-			return wrapErr(err)
-		}
-
-		err = permitNdp(session, baseObjects, 12)
-		if err != nil {
-			return wrapErr(err)
-		}
-
-		err = permitEndpoints(session, baseObjects, 12, opts.Endpoints)
-		if err != nil {
-			return wrapErr(err)
-		}
-
-		if opts.AllowLAN {
-			err = permitLAN(session, baseObjects, 12)
-			if err != nil {
+		for _, permit := range []func() error{
+			func() error { return permitLoopback(session, baseObjects, 13) },
+			func() error { return permitDHCPIPv4(session, baseObjects, 12) },
+			func() error { return permitDHCPIPv6(session, baseObjects, 12) },
+			func() error { return permitNdp(session, baseObjects, 12) },
+		} {
+			if err := permit(); err != nil {
 				return wrapErr(err)
 			}
 		}
-
-		err = blockAll(session, baseObjects, 0)
-		if err != nil {
-			return wrapErr(err)
+		if opts.AllowLAN {
+			if err := permitLAN(session, baseObjects, 12); err != nil {
+				return wrapErr(err)
+			}
 		}
-
-		return nil
-	}
-
-	err = runTransaction(session, objectInstaller)
+		return wrapErr(blockAll(session, baseObjects, 0))
+	})
 	if err != nil {
 		fwpmEngineClose0(session)
-		return wrapErr(err)
+		return nil, wrapErr(err)
 	}
-
-	wfpSession = session
-	return nil
+	return &Blocker{session: session}, nil
 }
 
-func DisableFirewall() {
-	if wfpSession != 0 {
-		fwpmEngineClose0(wfpSession)
-		wfpSession = 0
+// Close removes the filters.
+func (b *Blocker) Close() {
+	if b != nil && b.session != 0 {
+		fwpmEngineClose0(b.session)
+		b.session = 0
 	}
 }

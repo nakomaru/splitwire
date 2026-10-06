@@ -19,6 +19,7 @@ import (
 
 	"splitwire/internal/config"
 	"splitwire/internal/ipc"
+	"splitwire/internal/settings"
 	"splitwire/internal/stats"
 	"splitwire/internal/userconf"
 )
@@ -97,6 +98,7 @@ func TestWindowShots(t *testing.T) {
 		testTheme = theme.mode
 		w := newWindow(a)
 		offscreen(w.f.hwnd)
+		w.pick(w.rowOf("Office"))
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-vpn.png"))
 		w.showTab(tabProxy)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-proxy.png"))
@@ -116,12 +118,18 @@ func TestWindowShots(t *testing.T) {
 			w.refresh()
 			capture(t, w.f.hwnd, filepath.Join(out, fmt.Sprintf("%s-switch-%d.png", theme.name, i)))
 		}
-		w.pick(1) // WARP, a proxy in full mode
+		w.pick(w.rowOf("WARP")) // a proxy in full mode
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-warp-vpn.png"))
 		w.showTab(tabProxy)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-warp-proxy.png"))
-		w.pick(2) // broken
+		w.pick(w.rowOf("broken"))
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-broken.png"))
+		homeT := ipc.Tunnel{Name: "home", As: ipc.AsVPN, State: ipc.StateUp, ConfigHash: a.files["home"].hash, Since: now}
+		a.status = ipc.Status{Tunnels: []ipc.Tunnel{office, warpT, homeT}, Settings: settings.Settings{
+			KillSwitch: true, StrictDNS: true, Direct: []string{"203.0.113.0/24", "vpn.office.example"}}}
+		w.refresh()
+		w.pick(overviewRow)
+		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-overview.png"))
 		a.status = ipc.Status{Tunnels: []ipc.Tunnel{office, warpT}}
 		p := newPicker(w.f.hwnd, "Office", a.files["Office"].cfg.Apps)
 		offscreen(p.f.hwnd)

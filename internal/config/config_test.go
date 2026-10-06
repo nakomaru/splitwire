@@ -29,14 +29,11 @@ AllowLAN = yes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != ModeInclude || len(c.Apps) != 2 || !c.AllowLAN || !c.StrictDNS {
+	if c.Mode != ModeInclude || len(c.Apps) != 2 {
 		t.Fatalf("parsed %+v", c)
 	}
 	if c.WG.Name != "home" || len(c.WG.Peers) != 1 {
 		t.Fatalf("WireGuard part %+v", c.WG)
-	}
-	if c.KillSwitchOn() {
-		t.Fatal("kill switch on in include mode")
 	}
 	if got := c.TunnelAddress(true).String(); got != "10.8.0.2" {
 		t.Fatalf("tunnel IPv4 %s", got)
@@ -62,7 +59,7 @@ func TestSectionBeforePeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != ModeExclude || len(c.WG.Peers) != 1 || !c.KillSwitchOn() {
+	if c.Mode != ModeExclude || len(c.WG.Peers) != 1 {
 		t.Fatalf("parsed %+v", c)
 	}
 }
@@ -72,15 +69,15 @@ func TestPlainWireGuardConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != ModeFull || !c.KillSwitchOn() {
+	if c.Mode != ModeFull || !c.HasDefaultRoute() {
 		t.Fatalf("parsed %+v", c)
 	}
 	split, err := Parse(strings.Replace(base, "0.0.0.0/0, ::/0", "192.168.50.0/24", 1), "home")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if split.KillSwitchOn() {
-		t.Fatal("kill switch on without a default route")
+	if split.HasDefaultRoute() {
+		t.Fatal("default route without one in AllowedIPs")
 	}
 }
 
@@ -90,7 +87,6 @@ func TestParseErrors(t *testing.T) {
 		"include without apps": "[SplitWire]\nMode = include\n",
 		"apps in full mode":    "[SplitWire]\nApp = C:\\x.exe\n",
 		"bad mode":             "[SplitWire]\nMode = sideways\n",
-		"bad switch":           "[SplitWire]\nAllowLAN = maybe\n",
 	}
 	for name, section := range cases {
 		if _, err := Parse(base+section, "home"); err == nil {

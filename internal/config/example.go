@@ -26,14 +26,6 @@ const ExampleSection = `[SplitWire]
 # App takes absolute paths, %VARIABLES% and * ? globs. "splitwire apps
 # firefox" lists the paths of running programs that match.
 
-# Block traffic outside the tunnel while it runs, except in include mode.
-# auto means on when AllowedIPs has a default route.
-# KillSwitch = auto
-# Keep the local network reachable with the kill switch on.
-# AllowLAN = off
-# Block DNS servers other than [Interface] DNS.
-# StrictDNS = on
-
 # As a proxy: the SOCKS5 and HTTP port, picked on first use, or an address
 # and port such as 0.0.0.0:1080 to serve the local network.
 # Proxy = 1080

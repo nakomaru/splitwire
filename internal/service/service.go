@@ -260,7 +260,11 @@ func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 	// At boot the service manager holds those starts until this service
 	// leaves the start-pending state, so it reports running first.
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	t, err := engine.Up(ctx, c, settings.LoadDirect())
+	s := settings.LoadOrDefaults()
+	if err := engine.SetSettings(s); err != nil {
+		return fail(err)
+	}
+	t, err := engine.Up(ctx, c, s.DirectPrefixes())
 	if err != nil {
 		return fail(err)
 	}

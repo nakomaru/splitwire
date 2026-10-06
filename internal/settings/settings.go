@@ -21,6 +21,14 @@ const file = "settings.json"
 
 // Settings are the machine-wide choices.
 type Settings struct {
+	// KillSwitch blocks traffic outside the tunnels while a tunnel carries
+	// every address, so nothing leaks if it drops.
+	KillSwitch bool
+	// AllowLAN exempts private networks from the kill switch.
+	AllowLAN bool
+	// StrictDNS blocks DNS servers other than the running tunnels' while
+	// any tunnel sets DNS servers.
+	StrictDNS bool
 	// Direct is the Always direct list: address ranges, addresses and host
 	// names whose traffic leaves through the physical link, outside every
 	// tunnel except for the apps an include mode Split VPN carries.
@@ -35,9 +43,14 @@ func path() (string, error) {
 	return filepath.Join(dir, file), nil
 }
 
+// Defaults are the settings before any change.
+func Defaults() Settings {
+	return Settings{KillSwitch: true, StrictDNS: true}
+}
+
 // Load reads the settings; missing settings are the defaults.
 func Load() (Settings, error) {
-	var s Settings
+	s := Defaults()
 	p, err := path()
 	if err != nil {
 		return s, err
@@ -105,12 +118,13 @@ func (s Settings) DirectPrefixes() []netip.Prefix {
 	return slices.Compact(out)
 }
 
-// LoadDirect loads the settings and resolves the Always direct list.
-func LoadDirect() []netip.Prefix {
+// LoadOrDefaults loads the settings, logging a failure and returning the
+// defaults instead.
+func LoadOrDefaults() Settings {
 	s, err := Load()
 	if err != nil {
 		log.Printf("Settings: %v", err)
-		return nil
+		return Defaults()
 	}
-	return s.DirectPrefixes()
+	return s
 }

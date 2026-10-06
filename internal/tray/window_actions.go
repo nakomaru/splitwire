@@ -23,13 +23,6 @@ const (
 	idNo  = 7
 )
 
-func onOff(on bool) string {
-	if on {
-		return "on"
-	}
-	return "off"
-}
-
 func (w *window) copy(s string) {
 	if err := copyText(s); err != nil {
 		messageBox(w.f.hwnd, "Could not copy:\n\n"+err.Error(), windows.MB_ICONERROR)
@@ -63,10 +56,6 @@ func (w *window) edit(change func(string) string) {
 	}
 	w.load()
 	w.update()
-}
-
-func (w *window) setValue(key, val string, isDefault bool) {
-	w.edit(func(text string) string { return config.SetValue(text, key, val, isDefault) })
 }
 
 // setMode picks the apps the tunnel covers. A split mode without apps asks

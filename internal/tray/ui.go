@@ -167,6 +167,7 @@ const (
 	glyphCheckboxFill = '\uE73B'
 	glyphCheckMark    = '\uE73E'
 	glyphDelete       = '\uE74D'
+	glyphGlobe        = '\uE774'
 	glyphCopy         = '\uE8C8'
 	glyphCircleRing   = '\uEA3A'
 	glyphCircleFill   = '\uEA3B'

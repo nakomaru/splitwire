@@ -49,14 +49,18 @@ func (w *window) tunnelLine(name string) (uint32, bool, string, uint32) {
 }
 
 func (w *window) drawTunnel(dc uintptr, i int, r rect, selected bool) {
-	if i >= len(w.snap.names) {
+	if i > len(w.snap.names) {
 		return
 	}
 	f := w.f
-	name := w.snap.names[i]
 	if selected {
 		f.accentPill(dc, r)
 	}
+	if i == overviewRow {
+		w.drawOverviewRow(dc, r)
+		return
+	}
+	name := w.nameAt(i)
 	dot, filled, line, lineColor := w.tunnelLine(name)
 	g := rune(glyphCircleRing)
 	if filled {
