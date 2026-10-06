@@ -1,7 +1,8 @@
 # Builds a release into dist: splitwire-amd64.exe, splitwire-arm64.exe and
 # manifest.json, signed with keys\release.key into manifest.json.sig.
-# -Publish then creates the GitHub release v<version> at the pushed HEAD
-# with those files, which installed copies pick up as their next update.
+# -Publish then pushes a signed tag v<version> at the pushed HEAD and creates
+# the GitHub release with those files, which installed copies pick up as
+# their next update.
 # The version is main.go's, which winres\winres.json must match.
 param([switch]$Publish)
 $ErrorActionPreference = 'Stop'
@@ -32,6 +33,13 @@ if ($Publish) {
     git merge-base --is-ancestor $head origin/master
     if ($LASTEXITCODE) { throw "HEAD $head is not pushed to origin/master" }
     if (git status --porcelain) { throw "the working tree has changes that the release would not include" }
-    gh release create "v$version" (Get-ChildItem dist).FullName --target $head --title "SplitWire $version" --generate-notes
+    # The release takes the signed tag pushed first; a tag replaced after
+    # publishing briefly leaves the release untagged, and GitHub may cache
+    # the previous release as the latest meanwhile.
+    git tag -s "v$version" -m "SplitWire $version" $head
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    git push origin "v$version"
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    gh release create "v$version" (Get-ChildItem dist).FullName --verify-tag --title "SplitWire $version" --generate-notes
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 }
