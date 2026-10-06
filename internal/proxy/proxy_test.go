@@ -237,3 +237,28 @@ func TestAddrRoundTrip(t *testing.T) {
 		t.Fatalf("domain became %s %d %v", host, port, err)
 	}
 }
+
+// A proxy that cannot start, here on a port in use, reports an error
+// instead of failing while it undoes its start.
+func TestStartFailure(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	key, err := conf.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.9.0.2/32\n\n[Peer]\nPublicKey = %s\n"+
+		"Endpoint = 127.0.0.1:9\nAllowedIPs = 0.0.0.0/0\n\n[SplitWire]\nProxy = %s\n",
+		key, key.Public(), taken.Addr())
+	c, err := config.Parse(text, "busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := Start(c); err == nil {
+		p.Close()
+		t.Fatal("started on a port in use")
+	}
+}

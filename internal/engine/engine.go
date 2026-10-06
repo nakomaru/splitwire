@@ -160,26 +160,28 @@ func Run(ctx context.Context, c *config.Config) error {
 
 // Up brings the tunnel up, leaving the direct prefixes out of its routes.
 // On failure it undoes what it did.
-func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (t *Tunnel, err error) {
-	t = &Tunnel{cfg: c}
-	defer func() {
-		if err != nil {
-			t.Down()
-			t = nil
-		}
-	}()
+func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (*Tunnel, error) {
+	t := &Tunnel{cfg: c}
+	if err := t.up(ctx, direct); err != nil {
+		t.Down()
+		return nil, err
+	}
+	return t, nil
+}
 
+func (t *Tunnel) up(ctx context.Context, direct []netip.Prefix) error {
+	c := t.cfg
 	name, err := windows.UTF16PtrFromString(instanceMutex(c.WG.Name))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	mutex, err := windows.CreateMutex(nil, true, name)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		windows.CloseHandle(mutex)
-		return nil, fmt.Errorf("%s is already running", c.WG.Name)
+		return fmt.Errorf("%s is already running", c.WG.Name)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("create instance mutex: %w", err)
+		return fmt.Errorf("create instance mutex: %w", err)
 	}
 	t.mutex = mutex
 	shared.mu.Lock()
@@ -191,37 +193,37 @@ func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (t *Tunnel
 	if split {
 		devicePaths, err = resolveApps(c)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	if err := bootstrap.EnsureDirs(); err != nil {
-		return nil, err
+		return err
 	}
 	dll, err := bootstrap.EnsureWireGuardDLL(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := bootstrap.LoadWireGuardDLL(dll); err != nil {
-		return nil, err
+		return err
 	}
 	if split {
 		sys, err := bootstrap.EnsureDriver(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := bootstrap.EnsureDriverService(sys); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	log.Println("Resolving endpoints")
 	if err := c.WG.ResolveEndpoints(); err != nil {
-		return nil, err
+		return err
 	}
 	endpoints, err := peerEndpoints(c)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	t.endpoints = endpoints
 	var endpointAddrs []netip.Addr
@@ -229,67 +231,67 @@ func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (t *Tunnel
 		endpointAddrs = append(endpointAddrs, ep.Addr())
 	}
 	if t.releaseEndpoints, err = netcfg.HoldEndpointRoutes(endpointAddrs); err != nil {
-		return nil, fmt.Errorf("route endpoints: %w", err)
+		return fmt.Errorf("route endpoints: %w", err)
 	}
 
 	log.Println("Creating network adapter")
 	t.adapter, err = driver.CreateAdapter(c.WG.Name, TunnelType, adapterGUID(c.WG.Name))
 	if err != nil {
-		return nil, fmt.Errorf("create adapter: %w", err)
+		return fmt.Errorf("create adapter: %w", err)
 	}
 	t.luid = t.adapter.LUID()
 	if v, err := driver.RunningVersion(); err == nil {
 		log.Printf("Using WireGuardNT/%d.%d", (v>>16)&0xffff, v&0xffff)
 	}
 	if err := t.adapter.SetLogging(driver.AdapterLogOn); err != nil {
-		return nil, fmt.Errorf("enable adapter logging: %w", err)
+		return fmt.Errorf("enable adapter logging: %w", err)
 	}
 
 	if err := firewall.EnsureSublayers(); err != nil {
-		return nil, fmt.Errorf("register firewall sublayers: %w", err)
+		return fmt.Errorf("register firewall sublayers: %w", err)
 	}
 	if t.permits, err = firewall.Permit(uint64(t.luid), endpoints, c.WG.Interface.DNS, direct); err != nil {
-		return nil, fmt.Errorf("permit the tunnel in the firewall: %w", err)
+		return fmt.Errorf("permit the tunnel in the firewall: %w", err)
 	}
 	shared.mu.Lock()
 	shared.active[t] = true
 	err = applyBlockerLocked()
 	shared.mu.Unlock()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	log.Println("Setting interface configuration")
 	if err := t.adapter.SetConfiguration(c.WG.ToDriverConfiguration()); err != nil {
-		return nil, fmt.Errorf("configure adapter: %w", err)
+		return fmt.Errorf("configure adapter: %w", err)
 	}
 	if err := t.adapter.SetAdapterState(driver.AdapterStateUp); err != nil {
-		return nil, fmt.Errorf("bring adapter up: %w", err)
+		return fmt.Errorf("bring adapter up: %w", err)
 	}
 
 	t.families, err = netcfg.WaitForInterfaces(c, t.luid, time.Minute)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, f := range t.families {
 		if c.WG.Interface.MTU == 0 {
 			cbs, err := netcfg.MonitorMTU(f, t.luid)
 			if err != nil {
-				return nil, fmt.Errorf("monitor MTU: %w", err)
+				return fmt.Errorf("monitor MTU: %w", err)
 			}
 			t.callbacks = append(t.callbacks, cbs...)
 		}
 		if err := netcfg.Configure(c, t.luid, f, direct); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	if split {
 		if err := t.engageDriver(devicePaths); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return t, nil
+	return nil
 }
 
 // SetDirect leaves the direct prefixes out of the running tunnel's routes
@@ -512,7 +514,7 @@ func (t *Tunnel) Down() {
 		}
 		shared.mu.Unlock()
 		if last {
-			if err := firewall.RemoveSublayers(); err != nil {
+			if err := firewall.RemoveSublayersIfIdle(); err != nil {
 				log.Printf("Warning: remove firewall sublayers: %v", err)
 			}
 		}

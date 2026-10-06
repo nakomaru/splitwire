@@ -18,11 +18,13 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"splitwire/internal/config"
+	"splitwire/internal/firewall"
 	"splitwire/internal/netcfg"
 	"splitwire/internal/stats"
 )
@@ -40,6 +42,7 @@ type Proxy struct {
 	dns  bool
 	// releaseEndpoints gives back the peer endpoints' routes.
 	releaseEndpoints func()
+	permits          *firewall.Permits
 
 	mu     sync.Mutex
 	closed bool
@@ -47,51 +50,68 @@ type Proxy struct {
 	wg     sync.WaitGroup
 }
 
-// Start brings the tunnel up and listens on c.Proxy.
-func Start(c *config.Config) (p *Proxy, err error) {
+// Start brings the tunnel up and listens on c.Proxy. On failure it undoes
+// what it did.
+func Start(c *config.Config) (*Proxy, error) {
 	if !c.Proxy.IsValid() {
 		return nil, errors.New("the configuration has no Proxy address")
 	}
+	p := &Proxy{cfg: c, dns: len(c.WG.Interface.DNS) > 0, conns: make(map[net.Conn]struct{})}
+	if err := p.start(); err != nil {
+		p.Close()
+		return nil, err
+	}
+	return p, nil
+}
+
+func (p *Proxy) start() error {
+	c := p.cfg
 	var addrs []netip.Addr
 	for _, a := range c.WG.Interface.Addresses {
 		addrs = append(addrs, a.Addr())
 	}
 	if len(addrs) == 0 {
-		return nil, errors.New("a proxy tunnel needs an [Interface] Address")
+		return errors.New("a proxy tunnel needs an [Interface] Address")
 	}
 	mtu := int(c.WG.Interface.MTU)
 	if mtu == 0 {
 		mtu = DefaultMTU
 	}
 	if err := c.WG.ResolveEndpoints(); err != nil {
-		return nil, err
+		return err
 	}
-	var endpoints []netip.Addr
+	var endpoints []netip.AddrPort
+	var endpointAddrs []netip.Addr
 	for _, peer := range c.WG.Peers {
 		if a, err := netip.ParseAddr(peer.Endpoint.Host); err == nil {
-			endpoints = append(endpoints, a)
+			endpoints = append(endpoints, netip.AddrPortFrom(a, peer.Endpoint.Port))
+			endpointAddrs = append(endpointAddrs, a)
 		}
 	}
 
-	p = &Proxy{cfg: c, dns: len(c.WG.Interface.DNS) > 0, conns: make(map[net.Conn]struct{})}
-	defer func() {
-		if err != nil {
-			p.Close()
-			p = nil
-		}
-	}()
 	// The tunnel's packets go straight to its endpoints, so no VPN tunnel
 	// carries them.
-	if p.releaseEndpoints, err = netcfg.HoldEndpointRoutes(endpoints); err != nil {
-		return nil, fmt.Errorf("route endpoints: %w", err)
+	var err error
+	if p.releaseEndpoints, err = netcfg.HoldEndpointRoutes(endpointAddrs); err != nil {
+		return fmt.Errorf("route endpoints: %w", err)
 	}
-	p.ln, err = net.Listen("tcp", c.Proxy.String())
-	if err != nil {
-		return nil, fmt.Errorf("proxy: %w", err)
+	// A VPN's kill switch blocks traffic outside the tunnels; the permits
+	// let the proxy's packets to its endpoints through. Installing them
+	// takes administrator rights, as a kill switch does.
+	if windows.GetCurrentProcessToken().IsElevated() {
+		if err := firewall.EnsureSublayers(); err != nil {
+			return fmt.Errorf("register firewall sublayers: %w", err)
+		}
+		if p.permits, err = firewall.Permit(0, endpoints, nil, nil); err != nil {
+			return fmt.Errorf("permit the proxy in the firewall: %w", err)
+		}
+	}
+	if p.ln, err = net.Listen("tcp", c.Proxy.String()); err != nil {
+		return fmt.Errorf("proxy: %w", err)
 	}
 	tdev, tnet, err := netstack.CreateNetTUN(addrs, c.WG.Interface.DNS, mtu)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	p.tnet = tnet
 	p.bind = conn.NewDefaultBind()
@@ -101,14 +121,14 @@ func Start(c *config.Config) (p *Proxy, err error) {
 		Errorf:   func(format string, args ...any) { log.Printf(prefix+format, args...) },
 	})
 	if err := p.dev.IpcSet(uapi(c)); err != nil {
-		return nil, fmt.Errorf("configure: %w", err)
+		return fmt.Errorf("configure: %w", err)
 	}
 	if err := p.dev.Up(); err != nil {
-		return nil, err
+		return err
 	}
 	p.wg.Add(1)
 	go p.serve()
-	return p, nil
+	return nil
 }
 
 // Listen is the proxy's address.
@@ -132,6 +152,7 @@ func (p *Proxy) Close() {
 	if p.releaseEndpoints != nil {
 		p.releaseEndpoints()
 	}
+	p.permits.Close()
 }
 
 // track registers a connection for Close to end. It closes c and reports

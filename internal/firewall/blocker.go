@@ -9,6 +9,7 @@ package firewall
 
 import (
 	"errors"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -127,6 +128,19 @@ func EnsureSublayers() error {
 	})
 }
 
+// sessions counts the process's open Permits and Blockers, whose filters
+// live in the sublayers.
+var sessions atomic.Int32
+
+// RemoveSublayersIfIdle removes the sublayers unless the process still has
+// filters in them.
+func RemoveSublayersIfIdle() error {
+	if sessions.Load() > 0 {
+		return nil
+	}
+	return RemoveSublayers()
+}
+
 // RemoveSublayers deletes the sublayers and provider. It fails while any
 // filter, including the driver's, still references them.
 func RemoveSublayers() error {
@@ -196,6 +210,7 @@ func Block(opts Options) (*Blocker, error) {
 		fwpmEngineClose0(session)
 		return nil, wrapErr(err)
 	}
+	sessions.Add(1)
 	return &Blocker{session: session}, nil
 }
 
@@ -204,5 +219,6 @@ func (b *Blocker) Close() {
 	if b != nil && b.session != 0 {
 		fwpmEngineClose0(b.session)
 		b.session = 0
+		sessions.Add(-1)
 	}
 }

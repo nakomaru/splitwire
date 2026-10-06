@@ -283,8 +283,9 @@ type Permits struct {
 	session uintptr
 }
 
-// Permit installs the permits of the tunnel on tunnelLUID. EnsureSublayers
-// must run first.
+// Permit installs the permits of a tunnel: the adapter tunnelLUID, unless
+// it is zero for a tunnel without one, its endpoints, its DNS servers and
+// the direct prefixes. EnsureSublayers must run first.
 func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr, direct []netip.Prefix) (*Permits, error) {
 	session, err := openSession(cFWPM_SESSION_FLAG_DYNAMIC, "splitwire tunnel permits")
 	if err != nil {
@@ -292,8 +293,10 @@ func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr, dir
 	}
 	base := &baseObjects{provider: ProviderKey, filters: BaselineKey, dns: DNSKey}
 	err = runTransaction(session, func(session uintptr) error {
-		if err := permitTunInterface(session, base, 12, tunnelLUID); err != nil {
-			return err
+		if tunnelLUID != 0 {
+			if err := permitTunInterface(session, base, 12, tunnelLUID); err != nil {
+				return err
+			}
 		}
 		if err := permitEndpoints(session, base, 12, endpoints); err != nil {
 			return err
@@ -307,6 +310,7 @@ func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr, dir
 		fwpmEngineClose0(session)
 		return nil, wrapErr(err)
 	}
+	sessions.Add(1)
 	return &Permits{session: session}, nil
 }
 
@@ -315,5 +319,6 @@ func (p *Permits) Close() {
 	if p != nil && p.session != 0 {
 		fwpmEngineClose0(p.session)
 		p.session = 0
+		sessions.Add(-1)
 	}
 }
