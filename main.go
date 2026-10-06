@@ -49,7 +49,7 @@ import (
 	"splitwire/internal/wgimport"
 )
 
-const version = "0.4.3"
+const version = "0.5.0"
 
 const usage = `SplitWire ` + version + ` - a VPN client with per-app split tunneling
 
