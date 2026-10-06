@@ -680,8 +680,12 @@ func status(name string) error {
 					fmt.Printf("    peer %s: handshake %s, received %s, sent %s\n", p.PublicKey, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
 				}
 			}
-			if len(st.Settings.Direct) > 0 {
-				fmt.Printf("Always direct: %s\n", strings.Join(st.Settings.Direct, ", "))
+			set := st.Settings
+			on := map[bool]string{true: "on", false: "off"}
+			fmt.Printf("Protection: kill switch %s, local network allowed %s, only the tunnels' DNS servers %s\n",
+				on[set.KillSwitch], on[set.AllowLAN], on[set.StrictDNS])
+			if len(set.Direct) > 0 {
+				fmt.Printf("Always direct: %s\n", strings.Join(set.Direct, ", "))
 			}
 		}
 	} else {
