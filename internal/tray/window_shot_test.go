@@ -64,6 +64,9 @@ func TestWindowShots(t *testing.T) {
 	write("WARP", "[SplitWire]\nProxy = 1080\n"+config.ExampleSection)
 	write("home", config.ExampleSection)
 	dir, _ := userconf.Dir()
+	os.WriteFile(filepath.Join(dir, "lab.conf"), []byte("[Interface]\nPrivateKey = "+key()+
+		"\nAddress = 10.9.0.2/32\nDNS = 10.9.0.1, lab.example\n\n[Peer]\nPublicKey = "+key()+
+		"\nAllowedIPs = 10.9.0.0/16\nEndpoint = 198.51.100.4:51820\n"), 0o600)
 	os.WriteFile(filepath.Join(dir, "broken.conf"), []byte("[Interface]\nPrivateKey = nope\n"), 0o600)
 
 	a := newApp()
@@ -125,8 +128,9 @@ func TestWindowShots(t *testing.T) {
 		w.pick(w.rowOf("broken"))
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-broken.png"))
 		homeT := ipc.Tunnel{Name: "home", As: ipc.AsVPN, State: ipc.StateUp, ConfigHash: a.files["home"].hash, Since: now}
-		a.status = ipc.Status{Tunnels: []ipc.Tunnel{office, warpT, homeT}, Settings: settings.Settings{
-			KillSwitch: true, StrictDNS: true, Direct: []string{"203.0.113.0/24", "vpn.office.example"}}}
+		labT := ipc.Tunnel{Name: "lab", As: ipc.AsVPN, State: ipc.StateUp, ConfigHash: a.files["lab"].hash, Since: now}
+		a.status = ipc.Status{Tunnels: []ipc.Tunnel{office, warpT, homeT, labT}, Settings: settings.Settings{
+			KillSwitch: true, StrictDNS: true, Direct: []string{"10.9.4.0/24", "vpn.office.example"}}}
 		w.refresh()
 		w.pick(overviewRow)
 		shot(t, w.f.hwnd, filepath.Join(out, theme.name+"-overview.png"))

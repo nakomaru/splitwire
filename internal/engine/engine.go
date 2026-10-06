@@ -75,7 +75,9 @@ func applyBlockerLocked() error {
 		if shared.settings.KillSwitch && c.Mode != config.ModeInclude && c.HasDefaultRoute() {
 			opts.KillSwitch = true
 		}
-		if shared.settings.StrictDNS && len(c.WG.Interface.DNS) > 0 {
+		// Scoped DNS servers answer only their domains, so the system's
+		// servers keep answering everything else.
+		if shared.settings.StrictDNS && len(c.WG.Interface.DNS) > 0 && !c.ScopedDNS() {
 			opts.BlockDNS = true
 		}
 	}
@@ -118,6 +120,9 @@ type Tunnel struct {
 	releaseEndpoints func()
 	// families are the address families the adapter is configured for.
 	families []winipcfg.AddressFamily
+	// scopedDNS reports that a DNS policy rule sends the tunnel's domains
+	// to its DNS servers.
+	scopedDNS bool
 
 	callbacks []winipcfg.ChangeCallback
 	drv       *stdriver.Driver
@@ -284,6 +289,14 @@ func (t *Tunnel) up(ctx context.Context, direct []netip.Prefix) error {
 		if err := netcfg.Configure(c, t.luid, f, direct); err != nil {
 			return err
 		}
+	}
+
+	if c.ScopedDNS() {
+		if err := netcfg.SetScopedDNS(c.WG.Name, c.WG.Interface.DNS, c.WG.Interface.DNSSearch); err != nil {
+			return err
+		}
+		t.scopedDNS = true
+		log.Printf("DNS servers %v answer %s", c.WG.Interface.DNS, strings.Join(c.WG.Interface.DNSSearch, ", "))
 	}
 
 	if split {
@@ -497,6 +510,10 @@ func (t *Tunnel) Down() {
 	t.permits = nil
 	if t.adapter != nil {
 		netcfg.Flush(t.luid)
+		if t.scopedDNS {
+			netcfg.ClearScopedDNS(t.cfg.WG.Name)
+			t.scopedDNS = false
+		}
 		t.adapter.Close()
 		t.adapter = nil
 	}

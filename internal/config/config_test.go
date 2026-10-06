@@ -135,3 +135,25 @@ func TestWithExpandedApps(t *testing.T) {
 		t.Fatalf("round trip %+v", again)
 	}
 }
+
+func TestScopedDNS(t *testing.T) {
+	office := strings.Replace(strings.Replace(base, "DNS = 10.8.0.1", "DNS = 10.8.0.1, corp.example", 1),
+		"0.0.0.0/0, ::/0", "10.8.0.0/16", 1)
+	for _, c := range []struct {
+		name, text string
+		want       bool
+	}{
+		{"routed with a domain", office, true},
+		{"routed without a domain", strings.Replace(office, ", corp.example", "", 1), false},
+		{"default route", strings.Replace(base, "DNS = 10.8.0.1", "DNS = 10.8.0.1, corp.example", 1), false},
+		{"Split VPN", office + "\n[SplitWire]\nMode = include\nApp = C:\a.exe\n", false},
+	} {
+		cfg, err := Parse(c.text, "home")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.ScopedDNS(); got != c.want {
+			t.Errorf("%s: ScopedDNS %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -3,12 +3,14 @@ package tray
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
 
 	"splitwire/internal/config"
 	"splitwire/internal/ipc"
+	"splitwire/internal/netcfg"
 	"splitwire/internal/settings"
 )
 
@@ -66,7 +68,7 @@ func (w *window) layoutOverview(x0, x1, y, bottom int32) {
 	}
 	fixed := 3*(s(22)+s(8)) + 2*s(30) + s(16) + s(16) + bh + s(10)
 	lists := max(bottom-y-fixed, s(120))
-	routesH := lists * 45 / 100
+	routesH := lists * 60 / 100
 
 	head(o.hRoutes)
 	f.place(o.routeList, rect{x0, y, x1, y + routesH})
@@ -219,6 +221,8 @@ func (w *window) routeRows() []routeRow {
 		}
 	}
 	rows := append(split, vpns...)
+	rows = append(rows, w.dnsRows(tunnels)...)
+	rows = append(rows, w.overlapRows(tunnels)...)
 	switch n := len(w.snap.status.Settings.Direct); n {
 	case 0:
 	case 1:
@@ -379,4 +383,82 @@ func (w *window) drawOverviewRow(dc uintptr, r rect) {
 	x := r.left + f.px(36)
 	drawText(dc, "Overview", rect{x, r.top + f.px(7), r.right - f.px(8), r.top + f.px(27)}, f.fonts[fontNormal], f.col.text, dtSingleLine|dtVCenter|dtEndEllipsis)
 	drawText(dc, line, rect{x, r.top + f.px(26), r.right - f.px(8), r.bottom - f.px(6)}, f.fonts[fontNormal], f.col.subtext, dtSingleLine|dtVCenter|dtEndEllipsis)
+}
+
+// dnsRows lists the domains whose lookups a VPN's own DNS servers answer.
+func (w *window) dnsRows(tunnels []ipc.Tunnel) []routeRow {
+	var rows []routeRow
+	for _, t := range tunnels {
+		c := w.snap.files[t.Name].cfg
+		if !t.Running() || t.As != ipc.AsVPN || c == nil {
+			continue
+		}
+		vpn := *c
+		vpn.Mode = config.ModeFull
+		if vpn.ScopedDNS() {
+			rows = append(rows, routeRow{"Names in " + strings.Join(c.WG.Interface.DNSSearch, ", "), t.Name + " · DNS"})
+		}
+	}
+	return rows
+}
+
+// claim is a range a running tunnel or the Always direct list takes.
+type claim struct {
+	prefix netip.Prefix
+	owner  string
+}
+
+// overlapRows lists ranges that lie inside another tunnel's range, or the
+// Always direct list's, with the interface Windows sends them out of.
+func (w *window) overlapRows(tunnels []ipc.Tunnel) []routeRow {
+	var claims []claim
+	roles := make(map[string]string)
+	for _, t := range tunnels {
+		c := w.snap.files[t.Name].cfg
+		if !t.Running() || !ipc.Adapter(t.As) || c == nil || c.WG.Interface.TableOff {
+			continue
+		}
+		roles[t.Name] = roleName(t.As)
+		for _, p := range c.WG.Peers {
+			for _, ip := range p.AllowedIPs {
+				if !config.IsDefaultRoute(ip) {
+					claims = append(claims, claim{ip.Masked(), t.Name})
+				}
+			}
+		}
+	}
+	if d, err := config.ParseDirect(w.snap.status.Settings.Direct); err == nil {
+		for _, p := range d.Prefixes {
+			claims = append(claims, claim{p, "Always direct"})
+		}
+	}
+	var rows []routeRow
+	for i, a := range claims {
+		for _, b := range claims[i+1:] {
+			if a.owner == b.owner || !a.prefix.Overlaps(b.prefix) {
+				continue
+			}
+			inner, outer := a, b
+			if b.prefix.Bits() > a.prefix.Bits() {
+				inner, outer = b, a
+			}
+			where := "unknown"
+			if iface, tunnel, err := netcfg.RouteOf(inner.prefix.Addr()); err == nil {
+				switch {
+				case roles[iface] != "":
+					where = iface + " · " + roles[iface]
+				case tunnel:
+					where = iface
+				default:
+					where = "Direct"
+				}
+			}
+			what := fmt.Sprintf("%s, also in %s's %s", inner.prefix, outer.owner, outer.prefix)
+			if inner.prefix == outer.prefix {
+				what = fmt.Sprintf("%s, claimed by %s and %s", inner.prefix, inner.owner, outer.owner)
+			}
+			rows = append(rows, routeRow{what, where})
+		}
+	}
+	return rows
 }

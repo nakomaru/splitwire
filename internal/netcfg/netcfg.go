@@ -251,7 +251,13 @@ func Configure(c *config.Config, luid winipcfg.LUID, family winipcfg.AddressFami
 		return fmt.Errorf("set metric and MTU: %w", err)
 	}
 
-	if err := luid.SetDNS(family, c.WG.Interface.DNS, c.WG.Interface.DNSSearch); err != nil {
+	// Scoped DNS servers answer only their domains, through a DNS policy
+	// rule; the adapter keeps just the search domains.
+	servers := c.WG.Interface.DNS
+	if c.ScopedDNS() {
+		servers = nil
+	}
+	if err := luid.SetDNS(family, servers, c.WG.Interface.DNSSearch); err != nil {
 		return fmt.Errorf("set DNS: %w", err)
 	}
 	return nil

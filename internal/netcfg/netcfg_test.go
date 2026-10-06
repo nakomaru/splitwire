@@ -1,6 +1,7 @@
 package netcfg
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -86,4 +87,15 @@ func TestPhysicalLinks(t *testing.T) {
 		t.Skip("no default route on this machine")
 	}
 	t.Logf("physical IPv4 %+v IPv6 %+v", p.V4, p.V6)
+}
+
+func TestRouteOf(t *testing.T) {
+	iface, tunnel, err := RouteOf(netip.MustParseAddr("1.1.1.1"))
+	if err != nil {
+		t.Skipf("no route on this machine: %v", err)
+	}
+	t.Logf("1.1.1.1 goes out of %q, tunnel %v", iface, tunnel)
+	if iface == "" {
+		t.Fatal("no interface name")
+	}
 }

@@ -946,6 +946,9 @@ func cleanup(configs, wireguardNT bool) error {
 		log.Printf("Warning: remove the sign-in entry: %v", err)
 	}
 	tray.RemoveTempFiles()
+	if n := netcfg.ClearAllScopedDNS(); n > 0 {
+		log.Printf("Removed %d DNS policy rules", n)
+	}
 	if configs {
 		dir, err := userconf.Dir()
 		if err != nil {

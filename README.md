@@ -13,7 +13,10 @@ Each tunnel runs one of three ways:
   - **exclude**: every app except the listed ones uses the tunnel.
 - **VPN**: for every app, for the addresses in its `AllowedIPs`, as the
   WireGuard app does. Any number run at once, such as WARP for everything
-  and an office VPN for `10.0.0.0/8`; the most specific range wins.
+  and an office VPN for `10.0.0.0/8`; the most specific range wins. A VPN
+  without a default route whose `DNS` line also names domains, such as
+  `DNS = 10.0.0.53, corp.example`, answers only for those domains, through
+  the VPN; every other name goes to the usual DNS servers.
 - **Proxy**: a local SOCKS5 and HTTP proxy, entirely in user space, for the
   apps you point at it. Any number run at once.
 
@@ -44,7 +47,8 @@ tunnel, or starts an empty one. Split tunneling settings go in a
 ## Overview
 
 The window's Overview, at the top of the tunnel list, shows where traffic
-goes, and holds the settings for every tunnel:
+goes, as Windows routes it, including ranges that lie inside another
+tunnel's and which one wins. It holds the settings for every tunnel:
 
 - **Kill switch**: while a VPN carries every address, blocks traffic outside
   the tunnels, so nothing leaks if it drops. On at first.

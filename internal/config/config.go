@@ -222,6 +222,16 @@ func (c *Config) HasDefaultRoute() bool {
 	return false
 }
 
+// ScopedDNS reports whether the tunnel's DNS servers answer only for the
+// domains its DNS line names: it carries every app's traffic to its own
+// ranges, without a default route, and names both servers and domains.
+// Lookups of those names then travel through the tunnel, and every other
+// name goes to the system's servers.
+func (c *Config) ScopedDNS() bool {
+	return c.Mode == ModeFull && !c.WG.Interface.TableOff && !c.HasDefaultRoute() &&
+		len(c.WG.Interface.DNS) > 0 && len(c.WG.Interface.DNSSearch) > 0
+}
+
 func expandEnv(s string) (string, error) {
 	src, err := windows.UTF16PtrFromString(s)
 	if err != nil {
