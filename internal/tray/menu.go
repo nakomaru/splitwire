@@ -59,7 +59,7 @@ func (a *app) rebuild() {
 	}
 	systray.AddSeparator()
 
-	a.onClick(systray.AddMenuItem("Open SplitWire", "Tunnels, their apps and settings"), gen, a.openWindow)
+	a.onClick(systray.AddMenuItem("Open "+appTitle(), "Tunnels, their apps and settings"), gen, a.openWindow)
 	a.splitMI = systray.AddMenuItem("Split VPN", "One tunnel carries the apps its Mode picks")
 	a.splitOffMI = a.splitMI.AddSubMenuItemCheckbox("Off", "", true)
 	a.onClick(a.splitOffMI, gen, a.splitOff)

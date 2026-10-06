@@ -113,6 +113,21 @@ type window struct {
 // windowCreating marks a.win while the window thread starts.
 const windowCreating = ^uintptr(0)
 
+// toggleWindow closes the tunnels window while it shows, and opens it
+// otherwise. Closing asks about unsaved text first, as the close button does.
+func (a *app) toggleWindow() {
+	a.mu.Lock()
+	hwnd := a.win
+	a.mu.Unlock()
+	if hwnd != 0 && hwnd != windowCreating {
+		if iconic, _, _ := procIsIconic.Call(hwnd); iconic == 0 {
+			postMessage(hwnd, wmClose)
+			return
+		}
+	}
+	a.openWindow()
+}
+
 // openWindow shows the tunnels window, creating it on its own thread.
 func (a *app) openWindow() {
 	a.mu.Lock()
@@ -195,7 +210,7 @@ func newWindow(a *app) *window {
 			w.highlight()
 		}
 	}
-	newForm(f, "SplitWire", 0, wsOverlappedWindow, 920, 700)
+	newForm(f, appTitle(), 0, wsOverlappedWindow, 920, 700)
 
 	w.list = f.addList(&control{itemHeight: 52, empty: "No tunnels yet. Add one below."}, 0)
 	w.list.drawItem = w.drawTunnel

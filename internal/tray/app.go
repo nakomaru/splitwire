@@ -96,8 +96,9 @@ func newApp() *app {
 func (a *app) ready() {
 	systray.SetIcon(a.icons["down"])
 	systray.SetTooltip("SplitWire")
-	// A click on the icon opens the window; a right click shows the menu.
-	systray.SetOnTapped(func() { go a.openWindow() })
+	// A click on the icon opens or closes the window; a right click shows
+	// the menu.
+	systray.SetOnTapped(func() { go a.toggleWindow() })
 	a.scanTunnels()
 	a.rebuild()
 	go a.watchFolder()

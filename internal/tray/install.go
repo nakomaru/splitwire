@@ -23,6 +23,14 @@ import (
 // Version is this executable's version, set by the command.
 var Version string
 
+// appTitle names the app with its version, as its window and menu show it.
+func appTitle() string {
+	if Version == "" {
+		return "SplitWire"
+	}
+	return "SplitWire " + Version
+}
+
 // StartMenuName names the Start menu shortcut to the app.
 const StartMenuName = "SplitWire"
 

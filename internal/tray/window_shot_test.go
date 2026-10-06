@@ -99,6 +99,7 @@ func TestWindowShots(t *testing.T) {
 		mode int
 	}{{"dark", 1}, {"light", 2}} {
 		testTheme = theme.mode
+		Version = "0.4.3"
 		w := newWindow(a)
 		offscreen(w.f.hwnd)
 		w.pick(w.rowOf("Office"))
