@@ -125,7 +125,7 @@ func installWindow(self, installed string, updating bool) (installPlan, bool) {
 		"connect without prompts.\n\n" + driversNote
 	if updating {
 		title, button = "Update SplitWire", "Update"
-		intro = fmt.Sprintf("Updates SplitWire from version %s to %s. Running tunnels reconnect.",
+		intro = fmt.Sprintf("Updates SplitWire from version %s to %s. Running tunnels disconnect briefly and reconnect.",
 			installedVersion(installed), Version)
 		if !bootstrap.WireGuardNTInstalled() || !bootstrap.SplitDriverInstalled() {
 			intro += "\n\n" + driversNote

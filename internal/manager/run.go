@@ -120,11 +120,20 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 
 	entries, boot := m.loadBoot()
 	m.status.Boot = boot
+	if resumed, ok := loadResume(); ok {
+		entries = resumed
+		log.Printf("Reconnecting the %d tunnels that ran before the update", len(entries))
+	}
 	go func() {
 		for _, e := range entries {
 			if err := m.up(e.Name, e.As, e.Config); err != nil {
 				log.Printf("Boot start of %s failed: %v", e.Name, err)
 			}
+		}
+		// The file then lists what runs, so a later update brings back
+		// these tunnels and none from before a restart.
+		if err := m.writeRunning(runningFile); err != nil {
+			log.Printf("Save the running tunnels: %v", err)
 		}
 	}()
 	go m.serve(ln)
@@ -193,10 +202,10 @@ func (m *manager) handle(c *ipc.Conn) {
 			if err := m.up(req.Name, req.As, req.Config); err != nil {
 				rep.Error = err.Error()
 			}
-			m.saveBoot()
+			m.saveState()
 		case ipc.OpDown:
 			m.down(req.Name)
-			m.saveBoot()
+			m.saveState()
 		case ipc.OpBoot:
 			if err := m.setBoot(req.Boot); err != nil {
 				rep.Error = err.Error()
@@ -578,9 +587,28 @@ type bootEntry struct {
 	Config string
 }
 
-// loadBoot reads the boot tunnels, the Split VPN first, then the VPNs, then
-// the proxies, and whether boot start is on. A boot tunnel in the legacy
-// files becomes an entry of bootFile.
+// loadResume reads the tunnels that ran before an update, and reports
+// false when the last stop was not for an update or they were not saved.
+func loadResume() ([]bootEntry, bool) {
+	dir, err := bootstrap.ConfigsDir()
+	if err != nil {
+		return nil, false
+	}
+	marker := filepath.Join(dir, resumeFile)
+	if _, err := os.Stat(marker); err != nil {
+		return nil, false
+	}
+	os.Remove(marker)
+	entries, err := readEntries(filepath.Join(dir, runningFile))
+	if err != nil {
+		log.Printf("Tunnels before the update: %v", err)
+		return nil, false
+	}
+	return entries, true
+}
+
+// loadBoot reads the boot tunnels and whether boot start is on. A boot
+// tunnel in the legacy files becomes an entry of bootFile.
 func (m *manager) loadBoot() ([]bootEntry, bool) {
 	dir, err := bootstrap.ConfigsDir()
 	if err != nil {
@@ -598,16 +626,26 @@ func (m *manager) loadBoot() ([]bootEntry, bool) {
 		os.Remove(filepath.Join(dir, legacyBootName))
 		os.Remove(filepath.Join(dir, legacyBootConf))
 	}
-	b, err := os.ReadFile(path)
+	entries, err := readEntries(path)
 	if os.IsNotExist(err) {
 		return nil, false
 	}
-	var entries []bootEntry
-	if err == nil {
-		err = json.Unmarshal(b, &entries)
-	}
 	if err != nil {
 		log.Printf("Boot tunnels: %v", err)
+	}
+	return entries, true
+}
+
+// readEntries reads a file of tunnels, the Split VPN first, then the VPNs,
+// then the proxies.
+func readEntries(path string) ([]bootEntry, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var entries []bootEntry
+	if err := json.Unmarshal(b, &entries); err != nil {
+		return nil, err
 	}
 	for i := range entries {
 		if entries[i].As == ipc.AsVPN {
@@ -616,7 +654,7 @@ func (m *manager) loadBoot() ([]bootEntry, bool) {
 	}
 	rank := map[string]int{ipc.AsSplit: 0, ipc.AsVPN: 1, ipc.AsProxy: 2}
 	sort.SliceStable(entries, func(i, j int) bool { return rank[entries[i].As] < rank[entries[j].As] })
-	return entries, true
+	return entries, nil
 }
 
 // adapterRole is the way a boot entry recorded as a VPN runs: the Split VPN
@@ -639,21 +677,25 @@ func writeBoot(path string, entries []bootEntry) error {
 	return os.WriteFile(path, b, 0o600)
 }
 
-// saveBoot records the running tunnels as the boot tunnels while boot
-// start is on.
-func (m *manager) saveBoot() {
+// saveState records the running tunnels for an update, and as the boot
+// tunnels while boot start is on.
+func (m *manager) saveState() {
+	if err := m.writeRunning(runningFile); err != nil {
+		log.Printf("Save the running tunnels: %v", err)
+	}
 	m.mu.Lock()
 	on := m.status.Boot
 	m.mu.Unlock()
 	if !on {
 		return
 	}
-	if err := m.writeRunning(); err != nil {
+	if err := m.writeRunning(bootFile); err != nil {
 		log.Printf("Save the boot tunnels: %v", err)
 	}
 }
 
-func (m *manager) writeRunning() error {
+// writeRunning writes the running tunnels to the configs folder's file.
+func (m *manager) writeRunning(file string) error {
 	dir, err := bootstrap.ConfigsDir()
 	if err != nil {
 		return err
@@ -665,7 +707,7 @@ func (m *manager) writeRunning() error {
 	}
 	m.tunMu.RUnlock()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-	return writeBoot(filepath.Join(dir, bootFile), entries)
+	return writeBoot(filepath.Join(dir, file), entries)
 }
 
 // setBoot turns boot start on, recording the running tunnels, or off.
@@ -673,7 +715,7 @@ func (m *manager) setBoot(on bool) error {
 	m.op.Lock()
 	defer m.op.Unlock()
 	if on {
-		if err := m.writeRunning(); err != nil {
+		if err := m.writeRunning(bootFile); err != nil {
 			return err
 		}
 		log.Printf("Boot start on")

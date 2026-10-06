@@ -69,13 +69,10 @@ func (a *app) updateApp() {
 	}
 	intro := fmt.Sprintf("Updates SplitWire from version %s to %s.", Version, m.Version)
 	a.mu.Lock()
-	running, boot := len(a.status.Tunnels) > 0, a.status.Boot
+	running := len(a.status.Tunnels) > 0
 	a.mu.Unlock()
-	switch {
-	case running && boot:
-		intro += " Running tunnels reconnect."
-	case running:
-		intro += " Running tunnels disconnect."
+	if running {
+		intro += " Running tunnels disconnect briefly and reconnect."
 	}
 	if _, ok := askOptions("Update SplitWire", intro, nil, "Update"); !ok {
 		return

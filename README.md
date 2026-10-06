@@ -91,6 +91,7 @@ The installed copy is `%ProgramFiles%\splitwire\bin\splitwire.exe`.
 ## Updates
 
 SplitWire updates itself, and installs only updates signed by its author.
+Running tunnels disconnect briefly during an update and reconnect.
 
 ## Limits
 

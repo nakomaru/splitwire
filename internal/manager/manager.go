@@ -34,6 +34,14 @@ const statsInterval = 2 * time.Second
 // text, in the configs folder that only SYSTEM and Administrators can read.
 const bootFile = "boot.json"
 
+// runningFile holds the running tunnels with their configuration text,
+// and resumeFile marks a stop for an update, after which the manager
+// brings those tunnels back.
+const (
+	runningFile = "running.json"
+	resumeFile  = "resume"
+)
+
 // Files of the single boot tunnel that bootFile replaces.
 const (
 	legacyBootName = "autostart.name"
@@ -122,6 +130,11 @@ func Install(opts Options) error {
 	s, err := m.OpenService(ServiceName)
 	if err == nil {
 		log.Printf("Updating the existing %s service", ServiceName)
+		if dir, err := bootstrap.ConfigsDir(); err == nil {
+			if err := os.WriteFile(filepath.Join(dir, resumeFile), nil, 0o600); err != nil {
+				log.Printf("Warning: running tunnels will not reconnect: %v", err)
+			}
+		}
 		if err := stopService(s); err != nil {
 			s.Close()
 			return err
@@ -193,7 +206,7 @@ func Uninstall() error {
 		return err
 	}
 	if dir, err := bootstrap.ConfigsDir(); err == nil {
-		for _, f := range []string{bootFile, usersFile, legacyBootName, legacyBootConf} {
+		for _, f := range []string{bootFile, runningFile, resumeFile, usersFile, legacyBootName, legacyBootConf} {
 			os.Remove(filepath.Join(dir, f))
 		}
 	}
