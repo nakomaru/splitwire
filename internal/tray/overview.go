@@ -181,7 +181,8 @@ func (w *window) overviewStatus() string {
 }
 
 // routeRows lists where traffic goes: the Split VPN's apps, each VPN's
-// addresses, the Always direct list, everything else, and the proxies.
+// addresses and domains, overlapping ranges, the Always direct list, the
+// proxies, and last everything else.
 func (w *window) routeRows() []routeRow {
 	if w.snap.link != linkConnected {
 		return nil
@@ -230,8 +231,8 @@ func (w *window) routeRows() []routeRow {
 	default:
 		rows = append(rows, routeRow{fmt.Sprintf("%d Always direct entries", n), "Direct"})
 	}
-	rows = append(rows, everything)
-	return append(rows, proxies...)
+	rows = append(rows, proxies...)
+	return append(rows, everything)
 }
 
 // appNames names a configuration's apps in a few words.
