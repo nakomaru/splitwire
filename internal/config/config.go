@@ -56,24 +56,6 @@ func (s Switch) String() string {
 	return "auto"
 }
 
-// Via is the path a proxy tunnel's WireGuard packets take.
-type Via int
-
-const (
-	// ViaAuto follows the system routes, which include a running VPN tunnel's.
-	ViaAuto Via = iota
-	// ViaVPN sends them only through the running VPN tunnel, and drops them
-	// while none runs.
-	ViaVPN
-)
-
-func (v Via) String() string {
-	if v == ViaVPN {
-		return "vpn"
-	}
-	return "auto"
-}
-
 // ProxyHost is the address a proxy given only a port listens on.
 var ProxyHost = netip.AddrFrom4([4]byte{127, 0, 0, 1})
 
@@ -115,8 +97,6 @@ type Config struct {
 	// Proxy is the address the tunnel's SOCKS5 and HTTP proxy listens on
 	// when it runs as a proxy. It is invalid when unset.
 	Proxy netip.AddrPort
-	// ProxyVia selects the path of the proxy's own WireGuard packets.
-	ProxyVia Via
 
 	wgText string
 }
@@ -239,14 +219,7 @@ func (c *Config) set(key, val string) error {
 		}
 		c.Proxy = ap
 	case "proxyvia":
-		switch strings.ToLower(val) {
-		case "auto":
-			c.ProxyVia = ViaAuto
-		case "vpn":
-			c.ProxyVia = ViaVPN
-		default:
-			return fmt.Errorf("ProxyVia must be auto or vpn, not %q", val)
-		}
+		// Accepted and ignored: proxies connect directly to their endpoints.
 	default:
 		return fmt.Errorf("unknown [SplitWire] key %q", key)
 	}
@@ -404,6 +377,5 @@ func (c *Config) WithExpandedApps() (string, error) {
 	if c.Proxy.IsValid() {
 		fmt.Fprintf(&b, "Proxy = %s\n", c.Proxy)
 	}
-	fmt.Fprintf(&b, "ProxyVia = %s\n", c.ProxyVia)
 	return b.String(), nil
 }

@@ -26,13 +26,13 @@ func MonitorMTU(family winipcfg.AddressFamily, ourLUID winipcfg.LUID) ([]winipcf
 	doIt := func() error {
 		mu.Lock()
 		defer mu.Unlock()
-		luid, err := defaultInterface(family, ourLUID)
+		r, err := defaultRoute(family, ourLUID)
 		if err != nil {
 			return err
 		}
 		mtu := uint32(0)
-		if luid != 0 {
-			iface, err := luid.Interface()
+		if r != nil {
+			iface, err := r.InterfaceLUID.Interface()
 			if err != nil {
 				return err
 			}

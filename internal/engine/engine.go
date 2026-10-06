@@ -5,12 +5,14 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -27,7 +29,24 @@ import (
 // TunnelType is the WireGuardNT adapter type name.
 const TunnelType = "splitwire"
 
-const instanceMutex = `Global\splitwire-tunnel`
+// instanceMutex names the mutex that keeps one copy of a tunnel running on
+// the machine.
+func instanceMutex(name string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(name)))
+	return `Global\splitwire-tunnel-` + hex.EncodeToString(sum[:8])
+}
+
+// shared is the state the tunnels of one process share. The process holds
+// one firewall session, so the first tunnel that wants a kill switch or DNS
+// restriction owns it, and every tunnel's permits let it through.
+var shared struct {
+	mu sync.Mutex
+	// firewallOwner names the tunnel whose firewall is in force.
+	firewallOwner string
+	// live counts the running tunnels; the last one down removes the
+	// firewall sublayers.
+	live int
+}
 
 // Tunnel is a running tunnel.
 type Tunnel struct {
@@ -36,6 +55,9 @@ type Tunnel struct {
 	luid     winipcfg.LUID
 	mutex    windows.Handle
 	firewall bool
+	permits  *firewall.Permits
+	// releaseEndpoints gives back the peer endpoints' routes.
+	releaseEndpoints func()
 
 	callbacks []winipcfg.ChangeCallback
 	drv       *stdriver.Driver
@@ -81,19 +103,22 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 		}
 	}()
 
-	name, err := windows.UTF16PtrFromString(instanceMutex)
+	name, err := windows.UTF16PtrFromString(instanceMutex(c.WG.Name))
 	if err != nil {
 		return nil, err
 	}
 	mutex, err := windows.CreateMutex(nil, true, name)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		windows.CloseHandle(mutex)
-		return nil, errors.New("another SplitWire tunnel is running")
+		return nil, fmt.Errorf("%s is already running", c.WG.Name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create instance mutex: %w", err)
 	}
 	t.mutex = mutex
+	shared.mu.Lock()
+	shared.live++
+	shared.mu.Unlock()
 
 	split := c.Mode != config.ModeFull
 	var devicePaths []string
@@ -128,6 +153,17 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 	if err := c.WG.ResolveEndpoints(); err != nil {
 		return nil, err
 	}
+	endpoints, err := peerEndpoints(c)
+	if err != nil {
+		return nil, err
+	}
+	var endpointAddrs []netip.Addr
+	for _, ep := range endpoints {
+		endpointAddrs = append(endpointAddrs, ep.Addr())
+	}
+	if t.releaseEndpoints, err = netcfg.HoldEndpointRoutes(endpointAddrs); err != nil {
+		return nil, fmt.Errorf("route endpoints: %w", err)
+	}
 
 	log.Println("Creating network adapter")
 	t.adapter, err = driver.CreateAdapter(c.WG.Name, TunnelType, adapterGUID(c.WG.Name))
@@ -142,7 +178,13 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 		return nil, fmt.Errorf("enable adapter logging: %w", err)
 	}
 
-	if err := t.enableFirewall(); err != nil {
+	if err := firewall.EnsureSublayers(); err != nil {
+		return nil, fmt.Errorf("register firewall sublayers: %w", err)
+	}
+	if t.permits, err = firewall.Permit(uint64(t.luid), endpoints, c.WG.Interface.DNS); err != nil {
+		return nil, fmt.Errorf("permit the tunnel in the firewall: %w", err)
+	}
+	if err := t.enableFirewall(endpoints); err != nil {
 		return nil, err
 	}
 
@@ -179,30 +221,42 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 	return t, nil
 }
 
-func (t *Tunnel) enableFirewall() error {
-	c := t.cfg
-	opts := firewall.Options{
-		TunnelLUID: uint64(t.luid),
-		KillSwitch: c.KillSwitchOn(),
-		AllowLAN:   c.AllowLAN,
-	}
-	if c.StrictDNS && !c.WG.Interface.TableOff {
-		opts.DNSServers = c.WG.Interface.DNS
-	}
+// peerEndpoints are the resolved endpoints of the peers that have one.
+func peerEndpoints(c *config.Config) ([]netip.AddrPort, error) {
+	var eps []netip.AddrPort
 	for _, p := range c.WG.Peers {
 		if p.Endpoint.IsEmpty() {
 			continue
 		}
 		a, err := netip.ParseAddr(p.Endpoint.Host)
 		if err != nil {
-			return fmt.Errorf("endpoint %s did not resolve to an address", p.Endpoint.Host)
+			return nil, fmt.Errorf("endpoint %s did not resolve to an address", p.Endpoint.Host)
 		}
-		opts.Endpoints = append(opts.Endpoints, netip.AddrPortFrom(a, p.Endpoint.Port))
+		eps = append(eps, netip.AddrPortFrom(a, p.Endpoint.Port))
 	}
-	if err := firewall.EnsureSublayers(); err != nil {
-		return fmt.Errorf("register firewall sublayers: %w", err)
+	return eps, nil
+}
+
+// enableFirewall turns on the tunnel's kill switch and DNS restriction,
+// unless another tunnel of the process already holds the firewall.
+func (t *Tunnel) enableFirewall(endpoints []netip.AddrPort) error {
+	c := t.cfg
+	opts := firewall.Options{
+		TunnelLUID: uint64(t.luid),
+		KillSwitch: c.KillSwitchOn(),
+		AllowLAN:   c.AllowLAN,
+		Endpoints:  endpoints,
+	}
+	if c.StrictDNS && !c.WG.Interface.TableOff {
+		opts.DNSServers = c.WG.Interface.DNS
 	}
 	if !opts.KillSwitch && len(opts.DNSServers) == 0 {
+		return nil
+	}
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	if shared.firewallOwner != "" {
+		log.Printf("The kill switch and DNS restriction stay %s's; %s runs without its own", shared.firewallOwner, c.WG.Name)
 		return nil
 	}
 	log.Printf("Enabling firewall (kill switch %t, LAN %t, DNS restricted to %v)", opts.KillSwitch, opts.AllowLAN, opts.DNSServers)
@@ -210,6 +264,7 @@ func (t *Tunnel) enableFirewall() error {
 		return fmt.Errorf("enable firewall: %w", err)
 	}
 	t.firewall = true
+	shared.firewallOwner = c.WG.Name
 	return nil
 }
 
@@ -243,9 +298,9 @@ func resolveApps(c *config.Config) ([]string, error) {
 // no Internet address is blocked for split processes instead of leaking.
 func driverAddresses(mode config.Mode, wg4, wg6 netip.Addr, phys netcfg.Physical) stdriver.Addresses {
 	if mode == config.ModeInclude {
-		return stdriver.Addresses{TunnelIPv4: phys.IPv4, InternetIPv4: wg4, TunnelIPv6: phys.IPv6, InternetIPv6: wg6}
+		return stdriver.Addresses{TunnelIPv4: phys.V4.Addr, InternetIPv4: wg4, TunnelIPv6: phys.V6.Addr, InternetIPv6: wg6}
 	}
-	return stdriver.Addresses{TunnelIPv4: wg4, InternetIPv4: phys.IPv4, TunnelIPv6: wg6, InternetIPv6: phys.IPv6}
+	return stdriver.Addresses{TunnelIPv4: wg4, InternetIPv4: phys.V4.Addr, TunnelIPv6: wg6, InternetIPv6: phys.V6.Addr}
 }
 
 func (t *Tunnel) engageDriver(devicePaths []string) error {
@@ -278,7 +333,7 @@ func (t *Tunnel) engageDriver(devicePaths []string) error {
 	t.physical, err = netcfg.WatchPhysical(t.luid, func(p netcfg.Physical) {
 		a := driverAddresses(c.Mode, wg4, wg6, p)
 		log.Printf("Physical addresses %s %s; driver tunnel %s %s, internet %s %s",
-			addrText(p.IPv4), addrText(p.IPv6), addrText(a.TunnelIPv4), addrText(a.TunnelIPv6),
+			addrText(p.V4.Addr), addrText(p.V6.Addr), addrText(a.TunnelIPv4), addrText(a.TunnelIPv6),
 			addrText(a.InternetIPv4), addrText(a.InternetIPv6))
 		err := drv.RegisterAddresses(a)
 		if err != nil {
@@ -373,15 +428,30 @@ func (t *Tunnel) Down() {
 	if t.firewall {
 		firewall.DisableFirewall()
 		t.firewall = false
+		shared.mu.Lock()
+		shared.firewallOwner = ""
+		shared.mu.Unlock()
 	}
+	t.permits.Close()
+	t.permits = nil
 	if t.adapter != nil {
 		netcfg.Flush(t.luid)
 		t.adapter.Close()
 		t.adapter = nil
 	}
+	if t.releaseEndpoints != nil {
+		t.releaseEndpoints()
+		t.releaseEndpoints = nil
+	}
 	if t.mutex != 0 {
-		if err := firewall.RemoveSublayers(); err != nil {
-			log.Printf("Warning: remove firewall sublayers: %v", err)
+		shared.mu.Lock()
+		shared.live--
+		last := shared.live == 0
+		shared.mu.Unlock()
+		if last {
+			if err := firewall.RemoveSublayers(); err != nil {
+				log.Printf("Warning: remove firewall sublayers: %v", err)
+			}
 		}
 		windows.ReleaseMutex(t.mutex)
 		windows.CloseHandle(t.mutex)

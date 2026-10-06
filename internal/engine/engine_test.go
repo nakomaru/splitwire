@@ -10,20 +10,20 @@ import (
 
 func TestDriverAddresses(t *testing.T) {
 	wg4 := netip.MustParseAddr("10.8.0.2")
-	phys := netcfg.Physical{IPv4: netip.MustParseAddr("192.168.1.20"), IPv6: netip.MustParseAddr("2001:db8::20")}
+	phys := netcfg.Physical{V4: netcfg.Link{Addr: netip.MustParseAddr("192.168.1.20")}, V6: netcfg.Link{Addr: netip.MustParseAddr("2001:db8::20")}}
 
 	inc := driverAddresses(config.ModeInclude, wg4, netip.Addr{}, phys)
-	if inc.TunnelIPv4 != phys.IPv4 || inc.InternetIPv4 != wg4 {
+	if inc.TunnelIPv4 != phys.V4.Addr || inc.InternetIPv4 != wg4 {
 		t.Fatalf("include IPv4 %+v", inc)
 	}
 	// No tunnel IPv6: the physical IPv6 address stays in the Tunnel slot so
 	// the driver blocks it for listed apps.
-	if inc.TunnelIPv6 != phys.IPv6 || inc.InternetIPv6.IsValid() {
+	if inc.TunnelIPv6 != phys.V6.Addr || inc.InternetIPv6.IsValid() {
 		t.Fatalf("include IPv6 %+v", inc)
 	}
 
 	exc := driverAddresses(config.ModeExclude, wg4, netip.Addr{}, phys)
-	if exc.TunnelIPv4 != wg4 || exc.InternetIPv4 != phys.IPv4 || exc.TunnelIPv6.IsValid() || exc.InternetIPv6 != phys.IPv6 {
+	if exc.TunnelIPv4 != wg4 || exc.InternetIPv4 != phys.V4.Addr || exc.TunnelIPv6.IsValid() || exc.InternetIPv6 != phys.V6.Addr {
 		t.Fatalf("exclude %+v", exc)
 	}
 }

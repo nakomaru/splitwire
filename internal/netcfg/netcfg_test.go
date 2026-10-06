@@ -80,10 +80,10 @@ func TestRoutesIncludeWithoutDefault(t *testing.T) {
 	}
 }
 
-func TestPhysicalAddresses(t *testing.T) {
-	p := PhysicalAddresses(0)
-	if !p.IPv4.IsValid() && !p.IPv6.IsValid() {
+func TestPhysicalLinks(t *testing.T) {
+	p := PhysicalLinks(0)
+	if !p.V4.Addr.IsValid() && !p.V6.Addr.IsValid() {
 		t.Skip("no default route on this machine")
 	}
-	t.Logf("physical IPv4 %v IPv6 %v", p.IPv4, p.IPv6)
+	t.Logf("physical IPv4 %+v IPv6 %+v", p.V4, p.V6)
 }

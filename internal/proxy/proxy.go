@@ -1,6 +1,7 @@
 // Package proxy runs a tunnel in user space as a local SOCKS5 and HTTP
 // proxy. The tunnel has its own TCP/IP stack and no network adapter, so any
-// number of proxy tunnels run beside each other and beside a VPN tunnel.
+// number of proxy tunnels run beside each other and beside VPN tunnels, and
+// its packets go straight to its endpoint over the physical link.
 package proxy
 
 import (
@@ -22,15 +23,12 @@ import (
 	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"splitwire/internal/config"
+	"splitwire/internal/netcfg"
 	"splitwire/internal/stats"
 )
 
 // DefaultMTU is the tunnel MTU when [Interface] sets none.
 const DefaultMTU = 1420
-
-// NestedMTU is the default MTU of a tunnel whose packets travel inside a
-// VPN tunnel, leaving room for the outer tunnel's 80 bytes of overhead.
-const NestedMTU = DefaultMTU - 80
 
 // Proxy is a running proxy tunnel.
 type Proxy struct {
@@ -40,6 +38,8 @@ type Proxy struct {
 	tnet *netstack.Net
 	ln   net.Listener
 	dns  bool
+	// releaseEndpoints gives back the peer endpoints' routes.
+	releaseEndpoints func()
 
 	mu     sync.Mutex
 	closed bool
@@ -62,12 +62,15 @@ func Start(c *config.Config) (p *Proxy, err error) {
 	mtu := int(c.WG.Interface.MTU)
 	if mtu == 0 {
 		mtu = DefaultMTU
-		if c.ProxyVia == config.ViaVPN {
-			mtu = NestedMTU
-		}
 	}
 	if err := c.WG.ResolveEndpoints(); err != nil {
 		return nil, err
+	}
+	var endpoints []netip.Addr
+	for _, peer := range c.WG.Peers {
+		if a, err := netip.ParseAddr(peer.Endpoint.Host); err == nil {
+			endpoints = append(endpoints, a)
+		}
 	}
 
 	p = &Proxy{cfg: c, dns: len(c.WG.Interface.DNS) > 0, conns: make(map[net.Conn]struct{})}
@@ -77,6 +80,11 @@ func Start(c *config.Config) (p *Proxy, err error) {
 			p = nil
 		}
 	}()
+	// The tunnel's packets go straight to its endpoints, so no VPN tunnel
+	// carries them.
+	if p.releaseEndpoints, err = netcfg.HoldEndpointRoutes(endpoints); err != nil {
+		return nil, fmt.Errorf("route endpoints: %w", err)
+	}
 	p.ln, err = net.Listen("tcp", c.Proxy.String())
 	if err != nil {
 		return nil, fmt.Errorf("proxy: %w", err)
@@ -121,20 +129,9 @@ func (p *Proxy) Close() {
 	if p.dev != nil {
 		p.dev.Close()
 	}
-}
-
-// BindToInterface sends the tunnel's packets out of the interface with the
-// given index, or with index 0 along the system routes. Blackhole drops
-// them instead.
-func (p *Proxy) BindToInterface(index uint32, blackhole bool) error {
-	b, ok := p.bind.(conn.BindSocketToInterface)
-	if !ok {
-		return errors.New("the socket layer cannot bind to an interface")
+	if p.releaseEndpoints != nil {
+		p.releaseEndpoints()
 	}
-	if err := b.BindSocketToInterface4(index, blackhole); err != nil {
-		return err
-	}
-	return b.BindSocketToInterface6(index, blackhole)
 }
 
 // track registers a connection for Close to end. It closes c and reports

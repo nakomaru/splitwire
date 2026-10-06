@@ -8,22 +8,24 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
-// defaultInterface finds the up interface, other than exclude, whose default
-// route has the lowest combined route and interface metric.
-func defaultInterface(family winipcfg.AddressFamily, exclude winipcfg.LUID) (winipcfg.LUID, error) {
+// defaultRoute finds the default route, on an up interface other than
+// exclude, with the lowest combined route and interface metric. Tunnel
+// adapters, of type IfTypePropVirtual, never count, so the route found is the
+// one outside every VPN tunnel.
+func defaultRoute(family winipcfg.AddressFamily, exclude winipcfg.LUID) (*winipcfg.MibIPforwardRow2, error) {
 	rows, err := winipcfg.GetIPForwardTable2(family)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	best := ^uint64(0)
-	var luid winipcfg.LUID
+	var pick *winipcfg.MibIPforwardRow2
 	for i := range rows {
 		r := &rows[i]
 		if r.DestinationPrefix.PrefixLength != 0 || r.InterfaceLUID == exclude {
 			continue
 		}
 		ifrow, err := r.InterfaceLUID.Interface()
-		if err != nil || ifrow.OperStatus != winipcfg.IfOperStatusUp {
+		if err != nil || ifrow.OperStatus != winipcfg.IfOperStatusUp || ifrow.Type == winipcfg.IfTypePropVirtual {
 			continue
 		}
 		ipif, err := r.InterfaceLUID.IPInterface(family)
@@ -32,10 +34,10 @@ func defaultInterface(family winipcfg.AddressFamily, exclude winipcfg.LUID) (win
 		}
 		if m := uint64(r.Metric) + uint64(ipif.Metric); m < best {
 			best = m
-			luid = r.InterfaceLUID
+			pick = r
 		}
 	}
-	return luid, nil
+	return pick, nil
 }
 
 // interfaceAddress picks the address outbound connections on luid use: a
@@ -69,33 +71,54 @@ func interfaceAddress(family winipcfg.AddressFamily, luid winipcfg.LUID) (netip.
 	return pick, nil
 }
 
-// Physical holds the addresses of the default-route interface outside the tunnel.
-type Physical struct {
-	IPv4, IPv6 netip.Addr
+// Link is the default-route interface of one address family outside the
+// tunnels. Its LUID is zero when the family has no such route.
+type Link struct {
+	LUID  winipcfg.LUID
+	Index uint32
+	// Gateway is the default route's next hop, unspecified on a
+	// point-to-point link.
+	Gateway netip.Addr
+	// Addr is the address outbound connections on the interface use.
+	Addr netip.Addr
 }
 
-// PhysicalAddresses looks up the current physical addresses.
-func PhysicalAddresses(tunnel winipcfg.LUID) Physical {
+// Physical holds the default-route interfaces outside the tunnels.
+type Physical struct {
+	V4, V6 Link
+}
+
+// Of is the link of addr's family.
+func (p Physical) Of(addr netip.Addr) Link {
+	if addr.Unmap().Is4() {
+		return p.V4
+	}
+	return p.V6
+}
+
+// PhysicalLinks looks up the current physical links, never counting the
+// tunnel adapter.
+func PhysicalLinks(tunnel winipcfg.LUID) Physical {
 	var p Physical
 	for _, f := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
-		luid, err := defaultInterface(f, tunnel)
-		if err != nil || luid == 0 {
+		r, err := defaultRoute(f, tunnel)
+		if err != nil || r == nil {
 			continue
 		}
-		a, err := interfaceAddress(f, luid)
-		if err != nil {
-			continue
+		l := Link{LUID: r.InterfaceLUID, Index: r.InterfaceIndex, Gateway: r.NextHop.Addr()}
+		if a, err := interfaceAddress(f, r.InterfaceLUID); err == nil {
+			l.Addr = a
 		}
 		if f == windows.AF_INET {
-			p.IPv4 = a
+			p.V4 = l
 		} else {
-			p.IPv6 = a
+			p.V6 = l
 		}
 	}
 	return p
 }
 
-// PhysicalWatcher calls onChange with the physical addresses whenever routes,
+// PhysicalWatcher calls onChange with the physical links whenever routes,
 // interfaces or addresses change and the result differs from the last call.
 type PhysicalWatcher struct {
 	tunnel   winipcfg.LUID
@@ -109,7 +132,7 @@ type PhysicalWatcher struct {
 	stopped   sync.WaitGroup
 }
 
-// WatchPhysical starts a watcher and reports the initial addresses.
+// WatchPhysical starts a watcher and reports the initial links.
 func WatchPhysical(tunnel winipcfg.LUID, onChange func(Physical)) (*PhysicalWatcher, error) {
 	w := &PhysicalWatcher{
 		tunnel:   tunnel,
@@ -149,7 +172,7 @@ func WatchPhysical(tunnel winipcfg.LUID, onChange func(Physical)) (*PhysicalWatc
 	}
 	w.callbacks = append(w.callbacks, cbi)
 
-	w.last = PhysicalAddresses(tunnel)
+	w.last = PhysicalLinks(tunnel)
 	onChange(w.last)
 	w.stopped.Add(1)
 	go w.loop()
@@ -163,7 +186,7 @@ func (w *PhysicalWatcher) loop() {
 		case <-w.done:
 			return
 		case <-w.kick:
-			p := PhysicalAddresses(w.tunnel)
+			p := PhysicalLinks(w.tunnel)
 			w.mu.Lock()
 			changed := p != w.last
 			w.last = p
@@ -175,7 +198,7 @@ func (w *PhysicalWatcher) loop() {
 	}
 }
 
-// Current returns the last reported addresses.
+// Current returns the last reported links.
 func (w *PhysicalWatcher) Current() Physical {
 	w.mu.Lock()
 	defer w.mu.Unlock()

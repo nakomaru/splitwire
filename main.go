@@ -520,10 +520,6 @@ func runProxy(path string) error {
 	if err != nil {
 		return err
 	}
-	if c.ProxyVia == config.ViaVPN {
-		log.Printf("ProxyVia = vpn applies when the tray app runs the proxy; here its packets follow the system routes")
-		c.ProxyVia = config.ViaAuto
-	}
 	p, err := proxy.Start(c)
 	if err != nil {
 		return err
@@ -585,7 +581,7 @@ func check(path string) error {
 		}
 	}
 	if c.Proxy.IsValid() {
-		fmt.Printf("Proxy       %s when run as a proxy, packets via %s\n", c.Proxy, c.ProxyVia)
+		fmt.Printf("Proxy       %s when run as a proxy\n", c.Proxy)
 	} else {
 		fmt.Printf("Proxy       a free port from %d up, assigned when first run as a proxy\n", userconf.FirstProxyPort)
 	}
@@ -619,21 +615,13 @@ func check(path string) error {
 
 // describe says how a manager tunnel runs.
 func describe(t ipc.Tunnel) string {
-	if t.As == ipc.AsProxy {
-		d := "proxy on " + t.Listen
-		if t.Via == config.ViaVPN.String() {
-			d += " via the VPN"
-			if t.Waiting {
-				d += " (waiting for a VPN)"
-			}
-		}
-		return d
+	switch t.As {
+	case ipc.AsProxy:
+		return "proxy on " + t.Listen
+	case ipc.AsSplit:
+		return fmt.Sprintf("Split VPN, mode %s, %d apps", t.Mode, t.Apps)
 	}
-	d := "VPN, mode " + t.Mode
-	if t.Mode != config.ModeFull.String() {
-		d += fmt.Sprintf(", %d apps", t.Apps)
-	}
-	return d
+	return "VPN"
 }
 
 func onOff(b bool) string {

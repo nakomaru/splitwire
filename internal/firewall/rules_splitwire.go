@@ -192,3 +192,111 @@ func permitLAN(session uintptr, baseObjects *baseObjects, weight uint8) error {
 	runtime.KeepAlive(masks6)
 	return err
 }
+
+// permitDNS permits DNS to and from servers, past blockDNS's deny filters.
+func permitDNS(session uintptr, baseObjects *baseObjects, weight uint8, servers []netip.Addr) error {
+	for _, ipv6 := range []bool{false, true} {
+		// Repeated conditions on one field combine with logical OR.
+		conditions := []wtFwpmFilterCondition0{
+			{
+				fieldKey:  cFWPM_CONDITION_IP_REMOTE_PORT,
+				matchType: cFWP_MATCH_EQUAL,
+				conditionValue: wtFwpConditionValue0{
+					_type: cFWP_UINT16,
+					value: uintptr(53),
+				},
+			},
+			{
+				fieldKey:  cFWPM_CONDITION_IP_PROTOCOL,
+				matchType: cFWP_MATCH_EQUAL,
+				conditionValue: wtFwpConditionValue0{
+					_type: cFWP_UINT8,
+					value: uintptr(cIPPROTO_UDP),
+				},
+			},
+			{
+				fieldKey:  cFWPM_CONDITION_IP_PROTOCOL,
+				matchType: cFWP_MATCH_EQUAL,
+				conditionValue: wtFwpConditionValue0{
+					_type: cFWP_UINT8,
+					value: uintptr(cIPPROTO_TCP),
+				},
+			},
+		}
+		base := len(conditions)
+		var addresses []*wtFwpByteArray16
+		for _, ip := range servers {
+			ip = ip.Unmap()
+			if ip.Is6() != ipv6 {
+				continue
+			}
+			c := wtFwpmFilterCondition0{fieldKey: cFWPM_CONDITION_IP_REMOTE_ADDRESS, matchType: cFWP_MATCH_EQUAL}
+			if ipv6 {
+				a := &wtFwpByteArray16{byteArray16: ip.As16()}
+				addresses = append(addresses, a)
+				c.conditionValue = wtFwpConditionValue0{_type: cFWP_BYTE_ARRAY16_TYPE, value: uintptr(unsafe.Pointer(a))}
+			} else {
+				c.conditionValue = wtFwpConditionValue0{_type: cFWP_UINT32, value: uintptr(binary.BigEndian.Uint32(ip.AsSlice()))}
+			}
+			conditions = append(conditions, c)
+		}
+		if len(conditions) == base {
+			continue
+		}
+		filter := wtFwpmFilter0{
+			providerKey:         &baseObjects.provider,
+			subLayerKey:         baseObjects.dns,
+			weight:              filterWeight(weight),
+			numFilterConditions: uint32(len(conditions)),
+			filterCondition:     (*wtFwpmFilterCondition0)(unsafe.Pointer(&conditions[0])),
+			action: wtFwpmAction0{
+				_type: cFWP_ACTION_PERMIT,
+			},
+		}
+		err := addBothDirections(session, &filter, ipv6, "Permit tunnel DNS")
+		runtime.KeepAlive(addresses)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Permits let one tunnel through the kill switch and DNS restriction of
+// another: its adapter, its peer endpoints and its DNS servers. They live in
+// their own dynamic session, so Close or the process exiting removes them.
+type Permits struct {
+	session uintptr
+}
+
+// Permit installs the permits of the tunnel on tunnelLUID. EnsureSublayers
+// must run first.
+func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr) (*Permits, error) {
+	session, err := openSession(cFWPM_SESSION_FLAG_DYNAMIC, "splitwire tunnel permits")
+	if err != nil {
+		return nil, err
+	}
+	base := &baseObjects{provider: ProviderKey, filters: BaselineKey, dns: DNSKey}
+	err = runTransaction(session, func(session uintptr) error {
+		if err := permitTunInterface(session, base, 12, tunnelLUID); err != nil {
+			return err
+		}
+		if err := permitEndpoints(session, base, 12, endpoints); err != nil {
+			return err
+		}
+		return permitDNS(session, base, 15, dns)
+	})
+	if err != nil {
+		fwpmEngineClose0(session)
+		return nil, wrapErr(err)
+	}
+	return &Permits{session: session}, nil
+}
+
+// Close removes the permits.
+func (p *Permits) Close() {
+	if p != nil && p.session != 0 {
+		fwpmEngineClose0(p.session)
+		p.session = 0
+	}
+}

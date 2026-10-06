@@ -36,14 +36,14 @@ func (w *window) tunnelLine(name string) (uint32, bool, string, uint32) {
 		return col.err, true, "Failed", col.err
 	case t != nil && (t.State == ipc.StateStarting || t.State == ipc.StateStopping):
 		return col.caution, true, short(t), col.subtext
-	case t != nil && t.As == ipc.AsVPN:
-		return vpn, true, "VPN", col.subtext
+	case t != nil && ipc.Adapter(t.As):
+		return vpn, true, short(t), col.subtext
 	case t != nil:
 		return proxy, true, short(t), col.subtext
 	case file.error != "":
 		return col.err, false, "Has a problem", col.err
 	case file.cfg != nil:
-		return col.subtext, false, "Off \u00B7 " + vpnDetail(file.cfg), col.subtext
+		return col.subtext, false, "Off \u00B7 " + offDetail(file.cfg), col.subtext
 	}
 	return col.subtext, false, "Off", col.subtext
 }

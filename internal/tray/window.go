@@ -93,7 +93,7 @@ type window struct {
 
 	list, add, del                           *control
 	title, rename, status, banner, reconnect *control
-	segOff, segVPN, segProxy                 *control
+	segOff, segSplit, segVPN, segProxy       *control
 	tabs                                     [tabCount]*control
 	problem                                  *control
 
@@ -101,7 +101,7 @@ type window struct {
 	modeNote, appList, appAdd, appRemove, appHint *control
 	kill, lan, dns                                *control
 
-	portLabel, port, portNote, copyAddr, proxyHint, via, viaNote *control
+	portLabel, port, portNote, copyAddr, proxyHint *control
 
 	hIface, pubLabel, pub, copyPub, addrLabel, addrs, dnsLabel, dnsList *control
 	hPeer, endLabel, endpoint, allowLabel, allowed                      *control
@@ -207,6 +207,7 @@ func newWindow(a *app) *window {
 	w.banner = f.add(&control{kind: kindLabel, color: labelCaution, text: "Edited since it connected. Reconnect to use the changes."})
 	w.reconnect = f.add(&control{kind: kindButton, text: "Reconnect"})
 	w.segOff = f.add(&control{kind: kindButton, text: "Off"})
+	w.segSplit = f.add(&control{kind: kindButton, text: "Split VPN"})
 	w.segVPN = f.add(&control{kind: kindButton, text: "VPN"})
 	w.segProxy = f.add(&control{kind: kindButton, text: "Proxy"})
 	for i, name := range []string{"VPN", "Proxy", "Details", "Text"} {
@@ -233,9 +234,8 @@ func newWindow(a *app) *window {
 	w.portNote = f.add(&control{kind: kindLabel, color: labelSubtle})
 	w.copyAddr = f.add(&control{kind: kindButton, text: "Copy address", glyph: glyphCopy})
 	w.proxyHint = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true,
-		text: "Apps use the tunnel through their SOCKS5 or HTTP proxy setting, pointed at this address."})
-	w.via = f.add(&control{kind: kindCheck, text: "Connect through the VPN"})
-	w.viaNote = f.add(&control{kind: kindLabel, color: labelSubtle, wrap: true})
+		text: "Apps use the tunnel through their SOCKS5 or HTTP proxy setting, pointed at this address. " +
+			"Its packets go straight to its server, never through a VPN."})
 
 	w.hIface = f.add(&control{kind: kindLabel, font: fontSemibold, text: "Interface"})
 	w.pubLabel = f.add(&control{kind: kindLabel, color: labelSubtle, text: "Public key"})
@@ -296,9 +296,13 @@ func (w *window) layout(cw, ch int32) {
 	// Right: the selected tunnel.
 	x0, x1 := m+lw+s(28), cw-m
 	y := m
+	segs := []*control{w.segOff, w.segSplit, w.segVPN, w.segProxy}
 	segW, gap := s(76), s(4)
-	segX := x1 - 3*segW - 2*gap
-	for i, c := range []*control{w.segOff, w.segVPN, w.segProxy} {
+	for _, c := range segs {
+		segW = max(segW, f.buttonWidth(c))
+	}
+	segX := x1 - int32(len(segs))*segW - int32(len(segs)-1)*gap
+	for i, c := range segs {
 		x := segX + int32(i)*(segW+gap)
 		f.place(c, rect{x, y, x + segW, y + bh})
 	}
@@ -395,11 +399,6 @@ func (w *window) layoutProxy(x0, x1, y int32) {
 	y += bh + s(10)
 	h := f.measureWrapped(w.proxyHint.text, f.fonts[fontNormal], x1-x0)
 	f.place(w.proxyHint, rect{x0, y, x1, y + h})
-	y += h + s(24)
-	f.place(w.via, rect{x0, y, x0 + f.toggleWidth(w.via), y + s(28)})
-	y += s(30)
-	nx := x0 + s(30)
-	f.place(w.viaNote, rect{nx, y, x1, y + f.measureWrapped(w.viaNote.text, f.fonts[fontNormal], x1-nx)})
 }
 
 func (w *window) layoutDetails(x0, x1, y int32) {
@@ -602,13 +601,26 @@ func (w *window) update() {
 	f.enable(w.del, hasSel)
 
 	usable := connected && file.error == "" && hasSel
+	picksApps := file.cfg != nil && file.cfg.Mode != config.ModeFull
 	f.setOn(w.segOff, hasSel && !running)
-	f.setOn(w.segVPN, running && t.As == ipc.AsVPN)
-	f.setOn(w.segProxy, running && t.As == ipc.AsProxy)
 	f.enable(w.segOff, connected && running)
-	f.enable(w.segVPN, usable || running && t.As == ipc.AsVPN)
-	f.enable(w.segProxy, usable || running && t.As == ipc.AsProxy)
-	for _, c := range []*control{w.segOff, w.segVPN, w.segProxy} {
+	for _, seg := range []struct {
+		c  *control
+		as string
+		ok bool
+	}{{w.segSplit, ipc.AsSplit, picksApps}, {w.segVPN, ipc.AsVPN, true}, {w.segProxy, ipc.AsProxy, true}} {
+		this := running && t.As == seg.as
+		f.setOn(seg.c, this)
+		f.enable(seg.c, usable && seg.ok || this)
+	}
+	splitTip := "Runs it for the apps on the VPN tab. One tunnel is the Split VPN at a time."
+	if !picksApps {
+		splitTip = "Pick Include or Exclude on the VPN tab to run it for chosen apps."
+	}
+	if w.segSplit.tip != splitTip {
+		f.setTip(w.segSplit, splitTip)
+	}
+	for _, c := range []*control{w.segOff, w.segSplit, w.segVPN, w.segProxy} {
 		f.show(c, hasSel)
 	}
 
@@ -629,9 +641,7 @@ func (w *window) update() {
 	}
 	if c := w.cfg; c != nil {
 		w.updateVPN(c)
-		if w.updateProxy(c) {
-			layoutChanged = true
-		}
+		w.updateProxy(c)
 		if w.updateDetails(c) {
 			layoutChanged = true
 		}
@@ -653,16 +663,17 @@ func (w *window) updateVPN(c *config.Config) {
 	hint := "Programs an app starts follow it."
 	switch c.Mode {
 	case config.ModeFull:
-		f.setText(w.modeNote, "Every app uses the VPN, for the addresses in AllowedIPs.")
+		f.setText(w.modeNote, "As a VPN, every app uses it for the addresses in AllowedIPs. "+
+			"Include or Exclude lets it run as the Split VPN.")
 		w.appList.empty = "Pick Include or Exclude to choose apps."
 		if len(c.Apps) > 0 {
 			hint = "Kept for Include and Exclude."
 		}
 	case config.ModeInclude:
-		f.setText(w.modeNote, "Only the apps below use the VPN. Other apps connect directly.")
+		f.setText(w.modeNote, "As the Split VPN, only the apps below use it. As a VPN, every app does.")
 		w.appList.empty = "No apps yet."
 	case config.ModeExclude:
-		f.setText(w.modeNote, "Every app uses the VPN except the apps below, which connect directly.")
+		f.setText(w.modeNote, "As the Split VPN, every app except the ones below uses it. As a VPN, every app does.")
 		w.appList.empty = "No apps yet."
 	}
 	f.setText(w.appHint, hint)
@@ -708,33 +719,15 @@ func (w *window) updateVPN(c *config.Config) {
 	tip(w.dns, dnsTip)
 }
 
-// updateProxy shows the tunnel's settings as a proxy, and reports whether
-// the layout needs to follow.
-func (w *window) updateProxy(c *config.Config) bool {
+// updateProxy shows the tunnel's settings as a proxy.
+func (w *window) updateProxy(c *config.Config) {
 	f := w.f
-	f.setOn(w.via, c.ProxyVia == config.ViaVPN)
 	note := "Picks a free port from 1080 up"
 	if c.Proxy.IsValid() {
 		note = "Listens on " + c.Proxy.String()
 	}
 	f.setText(w.portNote, note)
 	f.enable(w.copyAddr, c.Proxy.IsValid())
-
-	// The path names the tunnels: the one running as the VPN, if another
-	// one does, and this one, the exit.
-	vpn := "the VPN"
-	for _, t := range w.snap.status.Tunnels {
-		if t.As == ipc.AsVPN && t.Name != w.sel && t.Running() {
-			vpn = t.Name
-		}
-	}
-	path := fmt.Sprintf("Apps \u2192 %s \u2192 %s \u2192 the internet. Sites see %s's address, and %s's server "+
-		"sees %s's address instead of yours. While no VPN runs, the proxy waits.", vpn, w.sel, w.sel, w.sel, vpn)
-	if path == w.viaNote.text {
-		return false
-	}
-	f.setText(w.viaNote, path)
-	return true
 }
 
 // updateDetails shows the tunnel's interface and first peer, and reports
@@ -807,7 +800,7 @@ func (w *window) statusText(t *ipc.Tunnel, file tunnelFile) string {
 			return "Off. It has a problem; see below."
 		}
 		if file.cfg != nil {
-			return "Off. As a VPN: " + vpnDetail(file.cfg) + "."
+			return "Off. As a VPN: " + routeDetail(file.cfg) + "."
 		}
 		return "Off"
 	}
@@ -820,14 +813,13 @@ func (w *window) statusText(t *ipc.Tunnel, file tunnelFile) string {
 		return "Failed: " + t.Error
 	}
 	var parts []string
-	if t.As == ipc.AsVPN {
-		parts = append(parts, "Connected as the VPN")
-	} else {
-		p := "Proxy on " + t.Listen
-		if t.Waiting {
-			p += ", waiting for a VPN"
-		}
-		parts = append(parts, p)
+	switch t.As {
+	case ipc.AsSplit:
+		parts = append(parts, "Connected as the Split VPN")
+	case ipc.AsVPN:
+		parts = append(parts, "Connected as a VPN")
+	default:
+		parts = append(parts, "Proxy on "+t.Listen)
 	}
 	if !t.Since.IsZero() {
 		since := t.Since.Local()
@@ -861,7 +853,7 @@ func (w *window) showTab(i int) {
 	f.show(w.kill, vpn)
 	f.show(w.lan, vpn)
 	f.show(w.dns, vpn)
-	for _, c := range []*control{w.portLabel, w.port, w.portNote, w.copyAddr, w.proxyHint, w.via, w.viaNote} {
+	for _, c := range []*control{w.portLabel, w.port, w.portNote, w.copyAddr, w.proxyHint} {
 		f.show(c, formOK && i == tabProxy)
 	}
 	for _, c := range []*control{w.hIface, w.pubLabel, w.pub, w.copyPub, w.addrLabel, w.addrs, w.dnsLabel, w.dnsList,
@@ -911,6 +903,8 @@ func (w *window) command(c *control, code uint16) {
 		w.renameTunnel()
 	case w.segOff:
 		go w.a.stop(name)
+	case w.segSplit:
+		go w.a.run(name, ipc.AsSplit)
 	case w.segVPN:
 		go w.a.run(name, ipc.AsVPN)
 	case w.segProxy:
@@ -939,12 +933,6 @@ func (w *window) command(c *control, code uint16) {
 		w.setValue("AllowLAN", onOff(!c.on), c.on)
 	case w.dns:
 		w.setValue("StrictDNS", onOff(!c.on), !c.on)
-	case w.via:
-		via := "vpn"
-		if c.on {
-			via = "auto"
-		}
-		w.setValue("ProxyVia", via, c.on)
 	case w.copyAddr:
 		if w.cfg != nil && w.cfg.Proxy.IsValid() {
 			w.copy(w.cfg.Proxy.String())
@@ -997,9 +985,12 @@ func (w *window) contextMenu(c *control, x, y int32) {
 	}
 	name := w.sel
 	t := w.tunnel()
-	usable := w.snap.link == linkConnected && w.snap.files[name].error == ""
+	file := w.snap.files[name]
+	usable := w.snap.link == linkConnected && file.error == ""
+	picksApps := file.cfg != nil && file.cfg.Mode != config.ModeFull
 	w.f.popup([]menuItem{
-		{text: "Connect as the VPN", check: t.Running() && t.As == ipc.AsVPN, disabled: !usable, run: func() { go w.a.run(name, ipc.AsVPN) }},
+		{text: "Connect as the Split VPN", check: t.Running() && t.As == ipc.AsSplit, disabled: !usable || !picksApps, run: func() { go w.a.run(name, ipc.AsSplit) }},
+		{text: "Connect as a VPN", check: t.Running() && t.As == ipc.AsVPN, disabled: !usable, run: func() { go w.a.run(name, ipc.AsVPN) }},
 		{text: "Connect as a proxy", check: t.Running() && t.As == ipc.AsProxy, disabled: !usable, run: func() { go w.a.run(name, ipc.AsProxy) }},
 		{text: "Disconnect", disabled: !t.Running(), run: func() { go w.a.stop(name) }},
 		{},

@@ -16,8 +16,8 @@ import (
 type tunnelMenu struct {
 	// In the top section, shown while the tunnel runs or failed.
 	status, apply *systray.MenuItem
-	// In the VPN and Proxies submenus.
-	vpn, proxy *systray.MenuItem
+	// In the Split VPN, VPNs and Proxies submenus.
+	split, vpn, proxy *systray.MenuItem
 }
 
 func (a *app) onClick(item *systray.MenuItem, gen chan struct{}, f func()) {
@@ -60,21 +60,25 @@ func (a *app) rebuild() {
 	systray.AddSeparator()
 
 	a.onClick(systray.AddMenuItem("Open SplitWire", "Tunnels, their apps and settings"), gen, a.openWindow)
-	a.vpnMI = systray.AddMenuItem("VPN", "One tunnel routes apps by its Mode")
-	a.vpnOffMI = a.vpnMI.AddSubMenuItemCheckbox("Off", "", true)
-	a.onClick(a.vpnOffMI, gen, a.vpnOff)
+	a.splitMI = systray.AddMenuItem("Split VPN", "One tunnel carries the apps its Mode picks")
+	a.splitOffMI = a.splitMI.AddSubMenuItemCheckbox("Off", "", true)
+	a.onClick(a.splitOffMI, gen, a.splitOff)
+	a.vpnsMI = systray.AddMenuItem("VPNs", "Any number of tunnels, each carrying its AllowedIPs for every app")
 	a.proxiesMI = systray.AddMenuItem("Proxies", "Any number of tunnels serve local SOCKS5 and HTTP proxies")
 	if len(a.names) == 0 {
-		a.vpnMI.AddSubMenuItem("No tunnels yet", "").Disable()
+		a.splitMI.AddSubMenuItem("No tunnels yet", "").Disable()
+		a.vpnsMI.AddSubMenuItem("No tunnels yet", "").Disable()
 		a.proxiesMI.AddSubMenuItem("No tunnels yet", "").Disable()
 	}
 	for _, name := range a.names {
 		name := name
 		m := a.menus[name]
-		m.vpn = a.vpnMI.AddSubMenuItemCheckbox(name, "", false)
-		a.onClick(m.vpn, gen, func() { a.toggleVPN(name) })
+		m.split = a.splitMI.AddSubMenuItemCheckbox(name, "", false)
+		a.onClick(m.split, gen, func() { a.toggle(name, ipc.AsSplit) })
+		m.vpn = a.vpnsMI.AddSubMenuItemCheckbox(name, "", false)
+		a.onClick(m.vpn, gen, func() { a.toggle(name, ipc.AsVPN) })
 		m.proxy = a.proxiesMI.AddSubMenuItemCheckbox(name, "", false)
-		a.onClick(m.proxy, gen, func() { a.toggleProxy(name) })
+		a.onClick(m.proxy, gen, func() { a.toggle(name, ipc.AsProxy) })
 	}
 	systray.AddSeparator()
 
@@ -119,24 +123,59 @@ func plural(n int, one string) string {
 	return fmt.Sprintf("%d %ss", n, one)
 }
 
-// vpnDetail describes how a configuration routes as a VPN.
-func vpnDetail(c *config.Config) string {
+// routeDetail describes the addresses a configuration carries as a VPN.
+func routeDetail(c *config.Config) string {
+	if c.HasDefaultRoute() {
+		return "all addresses"
+	}
+	var ranges []string
+	for _, p := range c.WG.Peers {
+		for _, ip := range p.AllowedIPs {
+			ranges = append(ranges, ip.String())
+		}
+	}
+	switch len(ranges) {
+	case 0:
+		return "no addresses"
+	case 1:
+		return ranges[0]
+	}
+	return fmt.Sprintf("%s and %d more", ranges[0], len(ranges)-1)
+}
+
+// splitDetail describes the apps a configuration picks as the Split VPN.
+func splitDetail(c *config.Config) string {
 	if c.Mode == config.ModeFull {
-		return "all traffic by AllowedIPs"
+		return "pick Include or Exclude first"
 	}
 	return c.Mode.String() + ", " + plural(len(c.Apps), "app")
 }
 
+// offDetail describes a configuration that is not running.
+func offDetail(c *config.Config) string {
+	if c.Mode != config.ModeFull {
+		return splitDetail(c)
+	}
+	return routeDetail(c)
+}
+
 // proxyDetail describes where a configuration's proxy listens.
 func proxyDetail(c *config.Config) string {
-	d := fmt.Sprintf("port picked from %d on first use", userconf.FirstProxyPort)
 	if c.Proxy.IsValid() {
-		d = c.Proxy.String()
+		return c.Proxy.String()
 	}
-	if c.ProxyVia == config.ViaVPN {
-		d += ", through the VPN"
+	return fmt.Sprintf("port picked from %d on first use", userconf.FirstProxyPort)
+}
+
+// roleName names a way of running a tunnel.
+func roleName(as string) string {
+	switch as {
+	case ipc.AsSplit:
+		return "Split VPN"
+	case ipc.AsVPN:
+		return "VPN"
 	}
-	return d
+	return "proxy"
 }
 
 // short describes a manager tunnel in a few words.
@@ -150,13 +189,9 @@ func short(t *ipc.Tunnel) string {
 		return "failed"
 	}
 	if t.As == ipc.AsProxy {
-		s := "proxy " + t.Listen
-		if t.Waiting {
-			s += ", waiting for a VPN"
-		}
-		return s
+		return "proxy " + t.Listen
 	}
-	return "VPN"
+	return roleName(t.As)
 }
 
 func check(item *systray.MenuItem, on bool) {
@@ -233,27 +268,37 @@ func (a *app) refreshLocked() {
 	systray.SetTooltip(truncate("SplitWire: "+summary, 120))
 	a.summaryMI.SetTitle(truncate(summary, 100))
 
-	vpnName, proxies := "", 0
+	splitName, vpns, proxies := "", 0, 0
 	for name, m := range a.menus {
 		var t *ipc.Tunnel
 		if connected {
 			t = st.Find(name)
 		}
 		a.refreshTunnel(name, m, t, a.files[name], connected)
-		if t.Running() && t.As == ipc.AsVPN {
-			vpnName = name
+		if !t.Running() {
+			continue
 		}
-		if t.Running() && t.As == ipc.AsProxy {
+		switch t.As {
+		case ipc.AsSplit:
+			splitName = name
+		case ipc.AsVPN:
+			vpns++
+		case ipc.AsProxy:
 			proxies++
 		}
 	}
-	if vpnName != "" {
-		a.vpnMI.SetTitle("VPN: " + vpnName)
+	if splitName != "" {
+		a.splitMI.SetTitle("Split VPN: " + splitName)
 	} else {
-		a.vpnMI.SetTitle("VPN: off")
+		a.splitMI.SetTitle("Split VPN: off")
 	}
-	check(a.vpnOffMI, vpnName == "")
-	enable(a.vpnOffMI, connected)
+	check(a.splitOffMI, splitName == "")
+	enable(a.splitOffMI, connected)
+	if vpns > 0 {
+		a.vpnsMI.SetTitle("VPNs: " + fmt.Sprint(vpns) + " running")
+	} else {
+		a.vpnsMI.SetTitle("VPNs")
+	}
 	if proxies > 0 {
 		a.proxiesMI.SetTitle("Proxies: " + fmt.Sprint(proxies) + " running")
 	} else {
@@ -289,36 +334,40 @@ func (a *app) refreshTunnel(name string, m *tunnelMenu, t *ipc.Tunnel, f tunnelF
 	}
 	show(m.apply, t != nil && t.State == ipc.StateUp && f.hash != "" && f.hash != t.ConfigHash)
 
-	// VPN and Proxies submenus.
-	vpnTitle, proxyTitle := name, name
-	if f.cfg != nil {
-		vpnTitle += "  -  " + vpnDetail(f.cfg)
-		proxyTitle += "  -  " + proxyDetail(f.cfg)
-	} else {
-		vpnTitle += "  -  configuration problem"
-		proxyTitle += "  -  configuration problem"
-	}
+	// Split VPN, VPNs and Proxies submenus: each shows the tunnel with what it
+	// does that way, and where it runs now when it runs another way.
 	running := t.Running()
-	switch {
-	case running && t.As == ipc.AsProxy:
-		vpnTitle += "  (proxy now)"
-	case running && t.As == ipc.AsVPN:
-		proxyTitle += "  (VPN now)"
+	items := []struct {
+		item *systray.MenuItem
+		as   string
+		ok   bool
+	}{
+		{m.split, ipc.AsSplit, f.cfg != nil && f.cfg.Mode != config.ModeFull},
+		{m.vpn, ipc.AsVPN, true},
+		{m.proxy, ipc.AsProxy, true},
 	}
-	if t != nil && t.State != ipc.StateUp {
-		state := " (" + short(t) + ")"
-		if t.As == ipc.AsVPN {
-			vpnTitle += state
-		} else {
-			proxyTitle += state
+	for i := range items {
+		it := &items[i]
+		title := name
+		switch {
+		case f.cfg == nil:
+			title += "  -  configuration problem"
+		case it.as == ipc.AsSplit:
+			title += "  -  " + splitDetail(f.cfg)
+		case it.as == ipc.AsVPN:
+			title += "  -  " + routeDetail(f.cfg)
+		default:
+			title += "  -  " + proxyDetail(f.cfg)
 		}
+		switch {
+		case running && t.As != it.as:
+			title += "  (" + roleName(t.As) + " now)"
+		case t != nil && t.State != ipc.StateUp && t.As == it.as:
+			title += " (" + short(t) + ")"
+		}
+		this := running && t.As == it.as
+		it.item.SetTitle(title)
+		check(it.item, this)
+		enable(it.item, connected && f.error == "" && it.ok || this)
 	}
-	m.vpn.SetTitle(vpnTitle)
-	m.proxy.SetTitle(proxyTitle)
-	check(m.vpn, running && t.As == ipc.AsVPN)
-	check(m.proxy, running && t.As == ipc.AsProxy)
-	usable := connected && f.error == ""
-	enable(m.vpn, usable || (running && t.As == ipc.AsVPN))
-	enable(m.proxy, usable || (running && t.As == ipc.AsProxy))
-
 }

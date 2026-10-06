@@ -68,7 +68,7 @@ func TestWindowShots(t *testing.T) {
 	a := newApp()
 	a.scanTunnels()
 	now := time.Now()
-	office := ipc.Tunnel{Name: "Office", As: ipc.AsVPN, State: ipc.StateUp, Mode: "include", Apps: 3,
+	office := ipc.Tunnel{Name: "Office", As: ipc.AsSplit, State: ipc.StateUp, Mode: "include", Apps: 3,
 		ConfigHash: a.files["Office"].hash, Since: now.Add(-47 * time.Minute)}
 	warpT := ipc.Tunnel{Name: "WARP", As: ipc.AsProxy, State: ipc.StateUp, Listen: "127.0.0.1:1080",
 		ConfigHash: a.files["WARP"].hash, Since: now.Add(-3 * time.Hour)}

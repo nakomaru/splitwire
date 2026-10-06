@@ -5,16 +5,20 @@ tunneling. It runs tunnels from standard
 [WireGuard](https://www.wireguard.com/) `.conf` files, and needs no
 WireGuard app.
 
-Each tunnel runs one of two ways:
+Each tunnel runs one of three ways:
 
-- **VPN**: through a WireGuardNT network adapter. One tunnel runs as the
-  VPN at a time, in one of three modes:
-  - **full**: routes by `AllowedIPs`, as the WireGuard app does.
+- **Split VPN**: for the apps you pick, through a WireGuardNT network
+  adapter. One tunnel is the Split VPN at a time, in one of two modes:
   - **include**: only the listed apps use the tunnel.
   - **exclude**: every app except the listed ones uses the tunnel.
-- **Proxy**: a local SOCKS5 and HTTP proxy, entirely in user space. Any
-  number run at once, beside the VPN, so different apps can use different
-  tunnels.
+- **VPN**: for every app, for the addresses in its `AllowedIPs`, as the
+  WireGuard app does. Any number run at once, such as WARP for everything
+  and an office VPN for `10.0.0.0/8`; the most specific range wins.
+- **Proxy**: a local SOCKS5 and HTTP proxy, entirely in user space, for the
+  apps you point at it. Any number run at once.
+
+Traffic none of them takes goes out directly. Each tunnel connects straight
+to its own server, never through another tunnel.
 
 ## Install
 
@@ -33,13 +37,12 @@ tunnel, or starts an empty one. Split tunneling settings go in a
 
 | Key | Values | Default |
 |---|---|---|
-| `Mode` | `full`, `include`, `exclude` | `full` |
+| `Mode` | `include` or `exclude`, for the Split VPN | `full`: not a Split VPN |
 | `App` | path to an app; `%VAR%` and `*` globs allowed; repeatable | |
 | `KillSwitch` | `auto`, `on`, `off` | `auto`: on with a default route |
 | `AllowLAN` | `on`, `off`: exempt the LAN from the kill switch | `off` |
 | `StrictDNS` | `on`, `off`: block DNS servers other than the tunnel's | `on` |
 | `Proxy` | port, or address and port | picked from 1080 up |
-| `ProxyVia` | `auto` or `vpn`: send proxy traffic only through the VPN | `auto` |
 
 ## Proxies
 
@@ -66,12 +69,15 @@ SplitWire updates itself, and installs only updates signed by its author.
 ## Limits
 
 - Include mode cuts listed apps off from the local network.
-- A VPN tunnel's `DNS` servers resolve names for every app, including the
-  ones split tunneling leaves out.
+- Two VPNs cannot carry the same range.
+- A tunnel's `DNS` servers resolve names for every app, including the ones
+  split tunneling leaves out.
+- One kill switch and DNS restriction apply at a time: those of the tunnel
+  that turned them on first, until it stops.
 - Apps keep existing connections' routes, so start the tunnel first.
 - Proxies work only for apps with proxy settings, and take no password.
-- Include and exclude modes cannot run while the Mullvad VPN app runs: the
-  split tunnel driver takes one controller at a time.
+- The Split VPN cannot run while the Mullvad VPN app runs: the split tunnel
+  driver takes one controller at a time.
 
 ## Uninstalling
 

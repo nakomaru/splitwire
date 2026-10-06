@@ -7,15 +7,15 @@ func TestParseProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Proxy.String() != "127.0.0.1:1081" || c.ProxyVia != ViaVPN {
-		t.Fatalf("Proxy %s via %s", c.Proxy, c.ProxyVia)
+	if c.Proxy.String() != "127.0.0.1:1081" {
+		t.Fatalf("Proxy %s", c.Proxy)
 	}
 	text, err := c.WithExpandedApps()
 	if err != nil {
 		t.Fatal(err)
 	}
 	again, err := Parse(text, "warp")
-	if err != nil || again.Proxy != c.Proxy || again.ProxyVia != ViaVPN {
+	if err != nil || again.Proxy != c.Proxy {
 		t.Fatalf("expanded text lost the proxy: %v\n%s", err, text)
 	}
 
@@ -34,8 +34,5 @@ func TestParseProxy(t *testing.T) {
 		if _, err := ParseProxy(v); err == nil {
 			t.Errorf("ParseProxy(%s) accepted", v)
 		}
-	}
-	if _, err := Parse(base+"\n[SplitWire]\nProxyVia = maybe\n", "x"); err == nil {
-		t.Error("ProxyVia = maybe accepted")
 	}
 }

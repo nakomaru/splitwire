@@ -26,7 +26,7 @@ const ServiceName = "splitwire"
 // Operations.
 const (
 	OpStatus = "status" // reply with the current Status
-	OpUp     = "up"     // bring Name up from Config as As; a VPN replaces the running VPN
+	OpUp     = "up"     // bring Name up from Config as As; a Split VPN replaces the running one
 	OpDown   = "down"   // take Name down, or every tunnel when Name is empty
 	OpWatch  = "watch"  // stream a Status on every change and periodically while tunnels run
 	OpBoot   = "boot"   // Boot: bring the running tunnels back up when Windows starts
@@ -36,13 +36,20 @@ const (
 
 // Ways a tunnel runs.
 const (
-	// AsVPN runs the tunnel through a network adapter, routed by its Mode.
-	// One tunnel runs as a VPN at a time.
+	// AsSplit runs the tunnel through a network adapter for the apps its
+	// Mode, include or exclude, picks. One tunnel runs as the Split VPN at a
+	// time.
+	AsSplit = "split"
+	// AsVPN runs the tunnel through a network adapter for every app, routed
+	// by AllowedIPs. Any number run at once, each with its own addresses.
 	AsVPN = "vpn"
 	// AsProxy runs the tunnel in user space behind a local SOCKS5 and HTTP
 	// proxy. Any number run at once.
 	AsProxy = "proxy"
 )
+
+// Adapter reports whether a tunnel running as as has a network adapter.
+func Adapter(as string) bool { return as == AsSplit || as == AsVPN }
 
 // Request is one client request.
 type Request struct {
@@ -66,14 +73,11 @@ type Tunnel struct {
 	Name  string
 	As    string
 	State string
-	// Mode and Apps describe a VPN.
+	// Mode and Apps describe a Split VPN.
 	Mode string `json:",omitempty"`
 	Apps int    `json:",omitempty"`
-	// Listen is a proxy's address. Via is "vpn" for a proxy bound to the
-	// VPN tunnel, and Waiting reports that no VPN runs for it.
-	Listen  string `json:",omitempty"`
-	Via     string `json:",omitempty"`
-	Waiting bool   `json:",omitempty"`
+	// Listen is a proxy's address.
+	Listen string `json:",omitempty"`
 	// ConfigHash identifies the configuration text the tunnel runs, so a
 	// client can tell when the file on disk has changed since.
 	ConfigHash string       `json:",omitempty"`

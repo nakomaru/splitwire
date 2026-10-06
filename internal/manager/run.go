@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,29 +14,34 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/config"
 	"splitwire/internal/engine"
 	"splitwire/internal/ipc"
 	"splitwire/internal/logx"
+	"splitwire/internal/netcfg"
 	"splitwire/internal/proxy"
 	"splitwire/internal/stats"
 )
 
-// running is a tunnel the manager runs: a VPN or a proxy.
+// running is a tunnel the manager runs: through an adapter, as the Split
+// VPN or a VPN, or as a proxy.
 type running struct {
-	as    string
-	text  string
-	vpn   *engine.Tunnel
-	proxy *proxy.Proxy
-	via   config.Via
+	as      string
+	text    string
+	adapter *engine.Tunnel
+	proxy   *proxy.Proxy
+	// claims are the destinations the adapter routes for every app.
+	claims []netip.Prefix
 }
 
 func (r *running) peers() ([]stats.Peer, error) {
-	if r.vpn != nil {
-		return r.vpn.Peers()
+	if r.adapter != nil {
+		return r.adapter.Peers()
 	}
 	return r.proxy.Peers()
 }
@@ -326,109 +332,137 @@ func (m *manager) tick(stop chan struct{}) {
 }
 
 func (m *manager) up(name, as, text string) error {
-	if as != ipc.AsVPN && as != ipc.AsProxy {
+	if as != ipc.AsSplit && as != ipc.AsVPN && as != ipc.AsProxy {
 		return fmt.Errorf("unknown way to run a tunnel: %q", as)
 	}
 	c, err := config.Parse(text, name)
 	if err != nil {
 		return err
 	}
+	switch as {
+	case ipc.AsSplit:
+		if c.Mode == config.ModeFull {
+			return fmt.Errorf("%s needs Mode = include or exclude to run as the Split VPN", name)
+		}
+	case ipc.AsVPN:
+		c.Mode = config.ModeFull
+	}
 	m.op.Lock()
 	defer m.op.Unlock()
 
 	m.stopLocked(name)
-	if as == ipc.AsVPN {
-		if vpn := m.vpnName(); vpn != "" {
-			m.stopLocked(vpn)
+	if as == ipc.AsSplit {
+		if split := m.splitName(); split != "" {
+			m.stopLocked(split)
 		}
 	}
 	m.removeTunnels(func(t *ipc.Tunnel) bool {
-		return t.Name == name || (as == ipc.AsVPN && t.As == ipc.AsVPN && t.State == ipc.StateError)
+		return t.Name == name || (as == ipc.AsSplit && t.As == ipc.AsSplit && t.State == ipc.StateError)
 	})
 
 	entry := ipc.Tunnel{Name: name, As: as, State: ipc.StateStarting, ConfigHash: ipc.ConfigHash(text)}
-	if as == ipc.AsVPN {
+	switch as {
+	case ipc.AsSplit:
 		entry.Mode, entry.Apps = c.Mode.String(), len(c.Apps)
-		log.Printf("Starting %s as the VPN (mode %s)", name, c.Mode)
-	} else {
+		log.Printf("Starting %s as the Split VPN (mode %s)", name, c.Mode)
+	case ipc.AsVPN:
+		log.Printf("Starting %s as a VPN", name)
+	default:
 		entry.Listen = c.Proxy.String()
-		if c.ProxyVia == config.ViaVPN {
-			entry.Via = c.ProxyVia.String()
-		}
-		log.Printf("Starting %s as a proxy on %s (via %s)", name, c.Proxy, c.ProxyVia)
+		log.Printf("Starting %s as a proxy on %s", name, c.Proxy)
 	}
 	m.setTunnel(name, func(t *ipc.Tunnel) { *t = entry })
+	fail := func(err error) error {
+		log.Printf("%s failed: %v", name, err)
+		m.setTunnel(name, func(t *ipc.Tunnel) { t.State, t.Error = ipc.StateError, err.Error() })
+		return err
+	}
 
-	r := &running{as: as, text: text, via: c.ProxyVia}
-	if as == ipc.AsVPN {
-		r.vpn, err = engine.Up(context.Background(), c)
+	r := &running{as: as, text: text}
+	if ipc.Adapter(as) {
+		r.claims = claims(c)
+		if other, p, ok := conflict(m.claimsLocked(), r.claims); ok {
+			return fail(fmt.Errorf("%s already routes %s", other, p))
+		}
+		r.adapter, err = engine.Up(context.Background(), c)
 	} else {
 		r.proxy, err = proxy.Start(c)
 	}
 	if err != nil {
-		log.Printf("%s failed: %v", name, err)
-		m.setTunnel(name, func(t *ipc.Tunnel) { t.State, t.Error = ipc.StateError, err.Error() })
-		return err
+		return fail(err)
 	}
 	m.tunMu.Lock()
 	m.tunnels[name] = r
 	m.tunMu.Unlock()
 	log.Printf("%s is up", name)
 	m.setTunnel(name, func(t *ipc.Tunnel) { t.State, t.Since = ipc.StateUp, time.Now() })
-	m.rebindLocked()
 	return nil
 }
 
-// vpnName is the tunnel running as the VPN, if any.
-func (m *manager) vpnName() string {
+// splitName is the tunnel running as the Split VPN, if any.
+func (m *manager) splitName() string {
 	m.tunMu.RLock()
 	defer m.tunMu.RUnlock()
 	for name, r := range m.tunnels {
-		if r.vpn != nil {
+		if r.as == ipc.AsSplit {
 			return name
 		}
 	}
 	return ""
 }
 
-// rebindLocked points proxies with ProxyVia = vpn at the running VPN's
-// interface, or drops their packets while no VPN runs.
-func (m *manager) rebindLocked() {
+// claimsLocked are the destinations each running adapter routes for
+// every app, by tunnel.
+func (m *manager) claimsLocked() map[string][]netip.Prefix {
 	m.tunMu.RLock()
-	var index uint32
-	vpn := false
+	defer m.tunMu.RUnlock()
+	out := make(map[string][]netip.Prefix)
 	for name, r := range m.tunnels {
-		if r.vpn == nil {
-			continue
+		if r.adapter != nil {
+			out[name] = r.claims
 		}
-		i, err := r.vpn.InterfaceIndex()
-		if err != nil {
-			log.Printf("VPN %s interface: %v", name, err)
-			continue
-		}
-		index, vpn = i, true
 	}
-	waiting := make(map[string]bool)
-	for name, r := range m.tunnels {
-		if r.proxy == nil || r.via != config.ViaVPN {
-			continue
-		}
-		if err := r.proxy.BindToInterface(index, !vpn); err != nil {
-			log.Printf("Proxy %s: bind to the VPN interface: %v", name, err)
-		}
-		waiting[name] = !vpn
+	return out
+}
+
+// claims are the destinations a tunnel's adapter routes for every app: its
+// routes, except include mode's default route, which carries only the
+// Split VPN's apps.
+func claims(c *config.Config) []netip.Prefix {
+	if c.WG.Interface.TableOff {
+		return nil
 	}
-	m.tunMu.RUnlock()
-	if len(waiting) == 0 {
-		return
-	}
-	m.publish(func(s *ipc.Status) {
-		for name, w := range waiting {
-			if t := s.Find(name); t != nil {
-				t.Waiting = w
+	var out []netip.Prefix
+	for _, f := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
+		routes, _ := netcfg.Routes(c, f)
+		for _, r := range routes {
+			if r.Metric != netcfg.IncludeDefaultMetric {
+				out = append(out, r.Destination)
 			}
 		}
-	})
+	}
+	return out
+}
+
+// conflict finds a running tunnel that already routes one of mine's
+// destinations. Windows sends each packet down the most specific route, so
+// only an identical destination conflicts.
+func conflict(running map[string][]netip.Prefix, mine []netip.Prefix) (string, netip.Prefix, bool) {
+	names := make([]string, 0, len(running))
+	for name := range running {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, p := range mine {
+		for _, name := range names {
+			for _, q := range running[name] {
+				if p == q {
+					return name, p, true
+				}
+			}
+		}
+	}
+	return "", netip.Prefix{}, false
 }
 
 // stopLocked takes the named tunnel down if it runs.
@@ -441,20 +475,17 @@ func (m *manager) stopLocked(name string) {
 		return
 	}
 	m.setTunnel(name, func(t *ipc.Tunnel) { t.State = ipc.StateStopping })
-	if r.vpn != nil {
-		r.vpn.Down()
+	if r.adapter != nil {
+		r.adapter.Down()
 	} else {
 		r.proxy.Close()
 	}
 	log.Printf("%s is down", name)
 	m.removeTunnels(func(t *ipc.Tunnel) bool { return t.Name == name })
-	if r.vpn != nil {
-		m.rebindLocked()
-	}
 }
 
 // down takes the named tunnel down, or every tunnel when name is empty,
-// and clears their failures. Proxies stop before the VPN they may use.
+// and clears their failures. Proxies stop first, then the adapters.
 func (m *manager) down(name string) {
 	m.op.Lock()
 	defer m.op.Unlock()
@@ -464,20 +495,16 @@ func (m *manager) down(name string) {
 		return
 	}
 	m.tunMu.RLock()
-	var names []string
-	vpn := ""
+	var proxies, adapters []string
 	for n, r := range m.tunnels {
-		if r.vpn != nil {
-			vpn = n
+		if r.adapter != nil {
+			adapters = append(adapters, n)
 		} else {
-			names = append(names, n)
+			proxies = append(proxies, n)
 		}
 	}
 	m.tunMu.RUnlock()
-	if vpn != "" {
-		names = append(names, vpn)
-	}
-	for _, n := range names {
+	for _, n := range append(proxies, adapters...) {
 		m.stopLocked(n)
 	}
 	m.removeTunnels(func(*ipc.Tunnel) bool { return true })
@@ -490,9 +517,9 @@ type bootEntry struct {
 	Config string
 }
 
-// loadBoot reads the boot tunnels, VPN first so proxies through it start
-// bound to it, and whether boot start is on. A boot tunnel in the legacy
-// files becomes a VPN entry of bootFile.
+// loadBoot reads the boot tunnels, the Split VPN first, then the VPNs, then
+// the proxies, and whether boot start is on. A boot tunnel in the legacy
+// files becomes an entry of bootFile.
 func (m *manager) loadBoot() ([]bootEntry, bool) {
 	dir, err := bootstrap.ConfigsDir()
 	if err != nil {
@@ -501,7 +528,7 @@ func (m *manager) loadBoot() ([]bootEntry, bool) {
 	path := filepath.Join(dir, bootFile)
 	if name, err := os.ReadFile(filepath.Join(dir, legacyBootName)); err == nil {
 		if text, err := os.ReadFile(filepath.Join(dir, legacyBootConf)); err == nil {
-			entries := []bootEntry{{Name: strings.TrimSpace(string(name)), As: ipc.AsVPN, Config: string(text)}}
+			entries := []bootEntry{{Name: strings.TrimSpace(string(name)), As: adapterRole(string(text)), Config: string(text)}}
 			if err := writeBoot(path, entries); err != nil {
 				log.Printf("Convert the boot tunnel: %v", err)
 				return entries, true
@@ -521,10 +548,23 @@ func (m *manager) loadBoot() ([]bootEntry, bool) {
 	if err != nil {
 		log.Printf("Boot tunnels: %v", err)
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].As == ipc.AsVPN && entries[j].As != ipc.AsVPN
-	})
+	for i := range entries {
+		if entries[i].As == ipc.AsVPN {
+			entries[i].As = adapterRole(entries[i].Config)
+		}
+	}
+	rank := map[string]int{ipc.AsSplit: 0, ipc.AsVPN: 1, ipc.AsProxy: 2}
+	sort.SliceStable(entries, func(i, j int) bool { return rank[entries[i].As] < rank[entries[j].As] })
 	return entries, true
+}
+
+// adapterRole is the way a boot entry recorded as a VPN runs: the Split VPN
+// when its configuration picks apps, a VPN otherwise.
+func adapterRole(text string) string {
+	if c, err := config.Parse(text, "boot"); err == nil && c.Mode != config.ModeFull {
+		return ipc.AsSplit
+	}
+	return ipc.AsVPN
 }
 
 func writeBoot(path string, entries []bootEntry) error {

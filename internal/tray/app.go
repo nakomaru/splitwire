@@ -66,8 +66,9 @@ type app struct {
 
 	menus       map[string]*tunnelMenu
 	summaryMI   *systray.MenuItem
-	vpnMI       *systray.MenuItem
-	vpnOffMI    *systray.MenuItem
+	splitMI     *systray.MenuItem
+	splitOffMI  *systray.MenuItem
+	vpnsMI      *systray.MenuItem
 	proxiesMI   *systray.MenuItem
 	downAllMI   *systray.MenuItem
 	bootMI      *systray.MenuItem
@@ -246,8 +247,8 @@ func (a *app) watchFolder() {
 
 // ---- actions ----
 
-// run brings the tunnel up as a VPN or a proxy. A tunnel without a Proxy
-// address gets one written to its file first.
+// run brings the tunnel up as the Split VPN, a VPN or a proxy. A tunnel
+// without a Proxy address gets one written to its file first.
 func (a *app) run(name, as string) {
 	a.mu.Lock()
 	t := a.status.Find(name)
@@ -318,15 +319,12 @@ func (a *app) toggle(name, as string) {
 	}
 }
 
-func (a *app) toggleVPN(name string)   { a.toggle(name, ipc.AsVPN) }
-func (a *app) toggleProxy(name string) { a.toggle(name, ipc.AsProxy) }
-
-// vpnOff takes the VPN tunnel down.
-func (a *app) vpnOff() {
+// splitOff takes the Split VPN down.
+func (a *app) splitOff() {
 	a.mu.Lock()
 	name := ""
 	for _, t := range a.status.Tunnels {
-		if t.As == ipc.AsVPN {
+		if t.As == ipc.AsSplit {
 			name = t.Name
 		}
 	}
