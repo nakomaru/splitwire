@@ -139,9 +139,10 @@ later install picks up again. Either can go too: in the menu, or with
 
 `.\build.ps1` builds `splitwire.exe`. To release, raise the version in
 `main.go` and `winres\winres.json`, run `go generate`, commit and push,
-then run `.\release.ps1 -Publish`, which builds, signs with
-`keys\release.key` (gitignored; keep a backup) and creates the GitHub
-release.
+then run `.\release.ps1 -Publish` in a console, which builds, signs with
+`keys\release.key` after asking for its passphrase, and creates the GitHub
+release. The key is an OpenSSH private key, gitignored; keep a backup.
+`go run ./tools/sign passphrase` sets or changes its passphrase.
 
 ## Licenses and trademarks
 
