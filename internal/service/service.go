@@ -19,6 +19,7 @@ import (
 	"splitwire/internal/config"
 	"splitwire/internal/engine"
 	"splitwire/internal/logx"
+	"splitwire/internal/settings"
 )
 
 // Prefix starts the name of every tunnel service.
@@ -259,7 +260,7 @@ func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 	// At boot the service manager holds those starts until this service
 	// leaves the start-pending state, so it reports running first.
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
-	t, err := engine.Up(ctx, c)
+	t, err := engine.Up(ctx, c, settings.LoadDirect())
 	if err != nil {
 		return fail(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"runtime"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -140,14 +141,26 @@ func permitEndpoints(session uintptr, baseObjects *baseObjects, weight uint8, en
 
 // permitLAN permits traffic with private, link-local and multicast peers.
 func permitLAN(session uintptr, baseObjects *baseObjects, weight uint8) error {
+	return permitPrefixes(session, baseObjects, weight, slices.Concat(lanPrefixes4, lanPrefixes6), "Permit LAN")
+}
+
+// permitPrefixes permits traffic with peers in prefixes.
+func permitPrefixes(session uintptr, baseObjects *baseObjects, weight uint8, prefixes []netip.Prefix, name string) error {
 	// Repeated conditions on one field combine with logical OR.
-	masks4 := make([]wtFwpV4AddrAndMask, len(lanPrefixes4))
-	conditions4 := make([]wtFwpmFilterCondition0, len(lanPrefixes4))
-	for i, p := range lanPrefixes4 {
-		masks4[i] = wtFwpV4AddrAndMask{
-			addr: binary.BigEndian.Uint32(p.Addr().AsSlice()),
-			mask: ^uint32(0) << (32 - p.Bits()),
+	var masks4 []wtFwpV4AddrAndMask
+	var masks6 []wtFwpV6AddrAndMask
+	for _, p := range prefixes {
+		if p.Addr().Is4() {
+			masks4 = append(masks4, wtFwpV4AddrAndMask{
+				addr: binary.BigEndian.Uint32(p.Addr().AsSlice()),
+				mask: ^uint32(0) << (32 - p.Bits()),
+			})
+		} else {
+			masks6 = append(masks6, wtFwpV6AddrAndMask{addr: p.Addr().As16(), prefixLength: uint8(p.Bits())})
 		}
+	}
+	conditions4 := make([]wtFwpmFilterCondition0, len(masks4))
+	for i := range masks4 {
 		conditions4[i] = wtFwpmFilterCondition0{
 			fieldKey:  cFWPM_CONDITION_IP_REMOTE_ADDRESS,
 			matchType: cFWP_MATCH_EQUAL,
@@ -157,10 +170,8 @@ func permitLAN(session uintptr, baseObjects *baseObjects, weight uint8) error {
 			},
 		}
 	}
-	masks6 := make([]wtFwpV6AddrAndMask, len(lanPrefixes6))
-	conditions6 := make([]wtFwpmFilterCondition0, len(lanPrefixes6))
-	for i, p := range lanPrefixes6 {
-		masks6[i] = wtFwpV6AddrAndMask{addr: p.Addr().As16(), prefixLength: uint8(p.Bits())}
+	conditions6 := make([]wtFwpmFilterCondition0, len(masks6))
+	for i := range masks6 {
 		conditions6[i] = wtFwpmFilterCondition0{
 			fieldKey:  cFWPM_CONDITION_IP_REMOTE_ADDRESS,
 			matchType: cFWP_MATCH_EQUAL,
@@ -172,22 +183,24 @@ func permitLAN(session uintptr, baseObjects *baseObjects, weight uint8) error {
 	}
 
 	filter := wtFwpmFilter0{
-		providerKey:         &baseObjects.provider,
-		subLayerKey:         baseObjects.filters,
-		weight:              filterWeight(weight),
-		numFilterConditions: uint32(len(conditions4)),
-		filterCondition:     (*wtFwpmFilterCondition0)(unsafe.Pointer(&conditions4[0])),
+		providerKey: &baseObjects.provider,
+		subLayerKey: baseObjects.filters,
+		weight:      filterWeight(weight),
 		action: wtFwpmAction0{
 			_type: cFWP_ACTION_PERMIT,
 		},
 	}
-	err := addBothDirections(session, &filter, false, "Permit LAN")
-	if err != nil {
-		return err
+	var err error
+	if len(conditions4) > 0 {
+		filter.numFilterConditions = uint32(len(conditions4))
+		filter.filterCondition = (*wtFwpmFilterCondition0)(unsafe.Pointer(&conditions4[0]))
+		err = addBothDirections(session, &filter, false, name)
 	}
-	filter.numFilterConditions = uint32(len(conditions6))
-	filter.filterCondition = (*wtFwpmFilterCondition0)(unsafe.Pointer(&conditions6[0]))
-	err = addBothDirections(session, &filter, true, "Permit LAN")
+	if err == nil && len(conditions6) > 0 {
+		filter.numFilterConditions = uint32(len(conditions6))
+		filter.filterCondition = (*wtFwpmFilterCondition0)(unsafe.Pointer(&conditions6[0]))
+		err = addBothDirections(session, &filter, true, name)
+	}
 	runtime.KeepAlive(masks4)
 	runtime.KeepAlive(masks6)
 	return err
@@ -263,15 +276,16 @@ func permitDNS(session uintptr, baseObjects *baseObjects, weight uint8, servers 
 }
 
 // Permits let one tunnel through the kill switch and DNS restriction of
-// another: its adapter, its peer endpoints and its DNS servers. They live in
-// their own dynamic session, so Close or the process exiting removes them.
+// another: its adapter, its peer endpoints, its DNS servers and the Always
+// direct ranges. They live in their own dynamic session, so Close or the
+// process exiting removes them.
 type Permits struct {
 	session uintptr
 }
 
 // Permit installs the permits of the tunnel on tunnelLUID. EnsureSublayers
 // must run first.
-func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr) (*Permits, error) {
+func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr, direct []netip.Prefix) (*Permits, error) {
 	session, err := openSession(cFWPM_SESSION_FLAG_DYNAMIC, "splitwire tunnel permits")
 	if err != nil {
 		return nil, err
@@ -282,6 +296,9 @@ func Permit(tunnelLUID uint64, endpoints []netip.AddrPort, dns []netip.Addr) (*P
 			return err
 		}
 		if err := permitEndpoints(session, base, 12, endpoints); err != nil {
+			return err
+		}
+		if err := permitPrefixes(session, base, 12, direct, "Permit Always direct"); err != nil {
 			return err
 		}
 		return permitDNS(session, base, 15, dns)

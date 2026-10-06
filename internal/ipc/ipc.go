@@ -14,6 +14,7 @@ import (
 
 	"github.com/Microsoft/go-winio"
 
+	"splitwire/internal/settings"
 	"splitwire/internal/stats"
 )
 
@@ -25,13 +26,14 @@ const ServiceName = "splitwire"
 
 // Operations.
 const (
-	OpStatus = "status" // reply with the current Status
-	OpUp     = "up"     // bring Name up from Config as As; a Split VPN replaces the running one
-	OpDown   = "down"   // take Name down, or every tunnel when Name is empty
-	OpWatch  = "watch"  // stream a Status on every change and periodically while tunnels run
-	OpBoot   = "boot"   // Boot: bring the running tunnels back up when Windows starts
-	OpLog    = "log"    // reply with recent manager log lines
-	OpUsers  = "users"  // reread the users who may connect and reopen the pipe for them
+	OpStatus   = "status"   // reply with the current Status
+	OpUp       = "up"       // bring Name up from Config as As; a Split VPN replaces the running one
+	OpDown     = "down"     // take Name down, or every tunnel when Name is empty
+	OpWatch    = "watch"    // stream a Status on every change and periodically while tunnels run
+	OpBoot     = "boot"     // Boot: bring the running tunnels back up when Windows starts
+	OpLog      = "log"      // reply with recent manager log lines
+	OpUsers    = "users"    // reread the users who may connect and reopen the pipe for them
+	OpSettings = "settings" // save and apply Settings
 )
 
 // Ways a tunnel runs.
@@ -58,6 +60,8 @@ type Request struct {
 	As     string `json:",omitempty"`
 	Config string `json:",omitempty"`
 	Boot   bool   `json:",omitempty"`
+	// Settings are the machine-wide choices OpSettings saves.
+	Settings *settings.Settings `json:",omitempty"`
 }
 
 // Tunnel states.
@@ -93,6 +97,8 @@ type Status struct {
 	Boot bool `json:",omitempty"`
 	// Users counts the users who may control the manager.
 	Users int `json:",omitempty"`
+	// Settings are the machine-wide choices in force.
+	Settings settings.Settings
 }
 
 // Find returns the named tunnel, or nil.

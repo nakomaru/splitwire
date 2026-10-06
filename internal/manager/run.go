@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"splitwire/internal/logx"
 	"splitwire/internal/netcfg"
 	"splitwire/internal/proxy"
+	"splitwire/internal/settings"
 	"splitwire/internal/stats"
 )
 
@@ -33,6 +35,7 @@ import (
 type running struct {
 	as      string
 	text    string
+	cfg     *config.Config
 	adapter *engine.Tunnel
 	proxy   *proxy.Proxy
 	// claims are the destinations the adapter routes for every app.
@@ -64,6 +67,9 @@ type manager struct {
 	// lnMu guards ln, the pipe listener, which reloadUsers replaces.
 	lnMu sync.Mutex
 	ln   net.Listener
+
+	// direct is the resolved Always direct list; op guards it.
+	direct []netip.Prefix
 }
 
 type service struct {
@@ -97,6 +103,12 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 	}
 	users := Users()
 	m.status.Users = len(users)
+	if s, err := settings.Load(); err != nil {
+		log.Printf("Settings: %v", err)
+	} else {
+		m.status.Settings = s
+		m.direct = s.DirectPrefixes()
+	}
 	ln, err := ipc.Listen(users)
 	if err != nil {
 		log.Printf("Error: listen on %s: %v", ipc.PipeName, err)
@@ -193,6 +205,12 @@ func (m *manager) handle(c *ipc.Conn) {
 			rep.Log = m.ring.Lines()
 		case ipc.OpUsers:
 			if err := m.reloadUsers(); err != nil {
+				rep.Error = err.Error()
+			}
+		case ipc.OpSettings:
+			if req.Settings == nil {
+				rep.Error = "no settings"
+			} else if err := m.setSettings(*req.Settings); err != nil {
 				rep.Error = err.Error()
 			}
 		case ipc.OpWatch:
@@ -378,13 +396,14 @@ func (m *manager) up(name, as, text string) error {
 		return err
 	}
 
-	r := &running{as: as, text: text}
+	r := &running{as: as, text: text, cfg: c}
 	if ipc.Adapter(as) {
-		r.claims = claims(c)
+		m.refreshDirectLocked()
+		r.claims = claims(c, m.direct)
 		if other, p, ok := conflict(m.claimsLocked(), r.claims); ok {
 			return fail(fmt.Errorf("%s already routes %s", other, p))
 		}
-		r.adapter, err = engine.Up(context.Background(), c)
+		r.adapter, err = engine.Up(context.Background(), c, m.direct)
 	} else {
 		r.proxy, err = proxy.Start(c)
 	}
@@ -425,17 +444,58 @@ func (m *manager) claimsLocked() map[string][]netip.Prefix {
 	return out
 }
 
+// setSettings saves the machine-wide settings and applies them to the
+// running tunnels.
+func (m *manager) setSettings(s settings.Settings) error {
+	if _, err := config.ParseDirect(s.Direct); err != nil {
+		return err
+	}
+	m.op.Lock()
+	defer m.op.Unlock()
+	if err := settings.Save(s); err != nil {
+		return err
+	}
+	m.publish(func(st *ipc.Status) { st.Settings = s })
+	log.Printf("Always direct: %v", s.Direct)
+	m.refreshDirectLocked()
+	return nil
+}
+
+// refreshDirectLocked resolves the Always direct list again and, when it
+// changed, applies it to the running adapters.
+func (m *manager) refreshDirectLocked() {
+	m.mu.Lock()
+	s := m.status.Settings
+	m.mu.Unlock()
+	direct := s.DirectPrefixes()
+	if slices.Equal(direct, m.direct) {
+		return
+	}
+	m.direct = direct
+	m.tunMu.Lock()
+	defer m.tunMu.Unlock()
+	for name, r := range m.tunnels {
+		if r.adapter == nil {
+			continue
+		}
+		if err := r.adapter.SetDirect(direct); err != nil {
+			log.Printf("%s: apply Always direct: %v", name, err)
+		}
+		r.claims = claims(r.cfg, direct)
+	}
+}
+
 // claims are the destinations a tunnel's adapter routes for every app: its
-// routes, except include mode's default route, which carries only the
-// Split VPN's apps.
-func claims(c *config.Config) []netip.Prefix {
+// routes without the Always direct prefixes, except include mode's default
+// route, which carries only the Split VPN's apps.
+func claims(c *config.Config, direct []netip.Prefix) []netip.Prefix {
 	if c.WG.Interface.TableOff {
 		return nil
 	}
 	var out []netip.Prefix
 	for _, f := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
 		routes, _ := netcfg.Routes(c, f)
-		for _, r := range routes {
+		for _, r := range netcfg.WithoutDirect(routes, direct) {
 			if r.Metric != netcfg.IncludeDefaultMetric {
 				out = append(out, r.Destination)
 			}

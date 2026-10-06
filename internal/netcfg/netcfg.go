@@ -171,16 +171,48 @@ func WaitForInterfaces(c *config.Config, luid winipcfg.LUID, timeout time.Durati
 	return ready(), nil
 }
 
+// WithoutDirect removes the Always direct prefixes from routes. Include
+// mode's default route stays whole: it carries only the Split VPN's apps,
+// which keep every destination.
+func WithoutDirect(routes []*winipcfg.RouteData, direct []netip.Prefix) []*winipcfg.RouteData {
+	if len(direct) == 0 {
+		return routes
+	}
+	var out []*winipcfg.RouteData
+	for _, r := range routes {
+		if r.Metric == IncludeDefaultMetric {
+			out = append(out, r)
+			continue
+		}
+		for _, p := range config.SubtractAll(r.Destination, direct) {
+			rr := *r
+			rr.Destination = p
+			out = append(out, &rr)
+		}
+	}
+	return out
+}
+
+// SetRoutes installs the tunnel's routes of one family without the Always
+// direct prefixes.
+func SetRoutes(c *config.Config, luid winipcfg.LUID, family winipcfg.AddressFamily, direct []netip.Prefix) error {
+	if c.WG.Interface.TableOff {
+		return nil
+	}
+	routes, warnings := Routes(c, family)
+	for _, w := range warnings {
+		log.Printf("Warning: %s", w)
+	}
+	if err := luid.SetRoutesForFamily(family, WithoutDirect(routes, direct)); err != nil {
+		return fmt.Errorf("set routes: %w", err)
+	}
+	return nil
+}
+
 // Configure applies addresses, routes, MTU, metric and DNS of one family.
-func Configure(c *config.Config, luid winipcfg.LUID, family winipcfg.AddressFamily) error {
-	if !c.WG.Interface.TableOff {
-		routes, warnings := Routes(c, family)
-		for _, w := range warnings {
-			log.Printf("Warning: %s", w)
-		}
-		if err := luid.SetRoutesForFamily(family, routes); err != nil {
-			return fmt.Errorf("set routes: %w", err)
-		}
+func Configure(c *config.Config, luid winipcfg.LUID, family winipcfg.AddressFamily, direct []netip.Prefix) error {
+	if err := SetRoutes(c, luid, family, direct); err != nil {
+		return err
 	}
 
 	var addrs []netip.Prefix

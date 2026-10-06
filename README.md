@@ -51,6 +51,18 @@ port; for Chrome and Edge, launch them with
 `--proxy-server=socks5://127.0.0.1:1080`. In Firefox, also turn on "Proxy
 DNS when using SOCKS v5".
 
+## Always direct
+
+Destinations on the Always direct list never go through a VPN, whatever
+ranges the VPNs carry: for example, an office VPN server that another VPN
+client reaches from a virtual machine. List address ranges, addresses or
+host names; names are looked up when a tunnel connects. An include mode
+Split VPN's apps still reach them through the Split VPN.
+
+```
+splitwire direct add 203.0.113.0/24 vpn.office.example
+```
+
 ## Command line
 
 ```

@@ -23,6 +23,7 @@ import (
 	"splitwire/internal/config"
 	"splitwire/internal/firewall"
 	"splitwire/internal/netcfg"
+	"splitwire/internal/settings"
 	"splitwire/internal/stdriver"
 )
 
@@ -56,8 +57,12 @@ type Tunnel struct {
 	mutex    windows.Handle
 	firewall bool
 	permits  *firewall.Permits
+	// endpoints are the peers' resolved endpoints.
+	endpoints []netip.AddrPort
 	// releaseEndpoints gives back the peer endpoints' routes.
 	releaseEndpoints func()
+	// families are the address families the adapter is configured for.
+	families []winipcfg.AddressFamily
 
 	callbacks []winipcfg.ChangeCallback
 	drv       *stdriver.Driver
@@ -80,9 +85,10 @@ func adapterGUID(name string) *windows.GUID {
 	return &g
 }
 
-// Run brings the tunnel up and keeps it up until ctx ends.
+// Run brings the tunnel up, with the saved Always direct list, and keeps it
+// up until ctx ends.
 func Run(ctx context.Context, c *config.Config) error {
-	t, err := Up(ctx, c)
+	t, err := Up(ctx, c, settings.LoadDirect())
 	if err != nil {
 		return err
 	}
@@ -93,8 +99,9 @@ func Run(ctx context.Context, c *config.Config) error {
 	return nil
 }
 
-// Up brings the tunnel up. On failure it undoes what it did.
-func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
+// Up brings the tunnel up, leaving the direct prefixes out of its routes.
+// On failure it undoes what it did.
+func Up(ctx context.Context, c *config.Config, direct []netip.Prefix) (t *Tunnel, err error) {
 	t = &Tunnel{cfg: c}
 	defer func() {
 		if err != nil {
@@ -157,6 +164,7 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 	if err != nil {
 		return nil, err
 	}
+	t.endpoints = endpoints
 	var endpointAddrs []netip.Addr
 	for _, ep := range endpoints {
 		endpointAddrs = append(endpointAddrs, ep.Addr())
@@ -181,7 +189,7 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 	if err := firewall.EnsureSublayers(); err != nil {
 		return nil, fmt.Errorf("register firewall sublayers: %w", err)
 	}
-	if t.permits, err = firewall.Permit(uint64(t.luid), endpoints, c.WG.Interface.DNS); err != nil {
+	if t.permits, err = firewall.Permit(uint64(t.luid), endpoints, c.WG.Interface.DNS, direct); err != nil {
 		return nil, fmt.Errorf("permit the tunnel in the firewall: %w", err)
 	}
 	if err := t.enableFirewall(endpoints); err != nil {
@@ -196,11 +204,11 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 		return nil, fmt.Errorf("bring adapter up: %w", err)
 	}
 
-	families, err := netcfg.WaitForInterfaces(c, t.luid, time.Minute)
+	t.families, err = netcfg.WaitForInterfaces(c, t.luid, time.Minute)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range families {
+	for _, f := range t.families {
 		if c.WG.Interface.MTU == 0 {
 			cbs, err := netcfg.MonitorMTU(f, t.luid)
 			if err != nil {
@@ -208,7 +216,7 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 			}
 			t.callbacks = append(t.callbacks, cbs...)
 		}
-		if err := netcfg.Configure(c, t.luid, f); err != nil {
+		if err := netcfg.Configure(c, t.luid, f, direct); err != nil {
 			return nil, err
 		}
 	}
@@ -219,6 +227,24 @@ func Up(ctx context.Context, c *config.Config) (t *Tunnel, err error) {
 		}
 	}
 	return t, nil
+}
+
+// SetDirect leaves the direct prefixes out of the running tunnel's routes
+// and lets them past the kill switch. The new permits go in before the old
+// ones go, so the firewall never blocks what both allow.
+func (t *Tunnel) SetDirect(direct []netip.Prefix) error {
+	for _, f := range t.families {
+		if err := netcfg.SetRoutes(t.cfg, t.luid, f, direct); err != nil {
+			return err
+		}
+	}
+	permits, err := firewall.Permit(uint64(t.luid), t.endpoints, t.cfg.WG.Interface.DNS, direct)
+	if err != nil {
+		return fmt.Errorf("permit the tunnel in the firewall: %w", err)
+	}
+	t.permits.Close()
+	t.permits = permits
+	return nil
 }
 
 // peerEndpoints are the resolved endpoints of the peers that have one.

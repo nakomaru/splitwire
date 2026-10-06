@@ -29,17 +29,22 @@ func parse(t *testing.T, text string) *config.Config {
 
 func TestClaims(t *testing.T) {
 	warp := parse(t, tunnelBase+"AllowedIPs = 0.0.0.0/0, ::/0\n")
-	if got := claims(warp); len(got) != 2 {
+	if got := claims(warp, nil); len(got) != 2 {
 		t.Fatalf("full tunnel claims %v", got)
+	}
+	// Always direct ranges leave the claims.
+	got := claims(warp, []netip.Prefix{netip.MustParsePrefix("128.0.0.0/1")})
+	if len(got) != 2 || got[0] != netip.MustParsePrefix("0.0.0.0/1") {
+		t.Fatalf("full tunnel with Always direct claims %v", got)
 	}
 	// Include mode's default route carries only the Split VPN's apps.
 	include := parse(t, tunnelBase+"AllowedIPs = 0.0.0.0/0, 10.1.0.0/16\n\n[SplitWire]\nMode = include\nApp = C:\\a.exe\n")
-	got := claims(include)
+	got = claims(include, nil)
 	if len(got) != 1 || got[0] != netip.MustParsePrefix("10.1.0.0/16") {
 		t.Fatalf("include tunnel claims %v", got)
 	}
 	off := parse(t, strings.Replace(tunnelBase, "[Peer]", "Table = off\n\n[Peer]", 1)+"AllowedIPs = 0.0.0.0/0\n")
-	if got := claims(off); len(got) != 0 {
+	if got := claims(off, nil); len(got) != 0 {
 		t.Fatalf("Table = off claims %v", got)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -59,6 +60,9 @@ Usage:
   splitwire warp [name]                 Register a free Cloudflare WARP device as a new tunnel
   splitwire check <tunnel>              Validate a configuration and show its effect
   splitwire apps [filter]               List running programs with their paths
+  splitwire direct [add|remove <entry>...]
+                                        List, add or remove Always direct address ranges,
+                                        addresses and host names, which no tunnel carries
   splitwire install <tunnel>            Install a tunnel as a service that starts at boot
   splitwire uninstall <name>            Stop and remove an installed tunnel
   splitwire start <name>                Start an installed tunnel
@@ -313,6 +317,8 @@ func run(args []string) error {
 			filter = strings.Join(args[1:], " ")
 		}
 		return apps(filter)
+	case "direct":
+		return direct(args[1:])
 	}
 
 	switch args[0] {
@@ -693,6 +699,9 @@ func status(name string) error {
 					fmt.Printf("    peer %s: handshake %s, received %s, sent %s\n", p.PublicKey, stats.Ago(p.LastHandshake), stats.Bytes(p.RxBytes), stats.Bytes(p.TxBytes))
 				}
 			}
+			if len(st.Settings.Direct) > 0 {
+				fmt.Printf("Always direct: %s\n", strings.Join(st.Settings.Direct, ", "))
+			}
 		}
 	} else {
 		fmt.Println("Manager: not installed (splitwire manager install)")
@@ -801,6 +810,61 @@ func runInstalled(exe string, args ...string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s %s: %w", exe, strings.Join(args, " "), err)
 	}
+	return nil
+}
+
+// direct lists the Always direct entries, or adds or removes some through
+// the manager.
+func direct(args []string) error {
+	const usage = "usage: splitwire direct [add|remove <range, address or host name>...]"
+	if !manager.Installed() {
+		return errors.New("the SplitWire service is not installed (splitwire manager install)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	rep, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpStatus})
+	if err != nil {
+		return err
+	}
+	s := rep.Status.Settings
+	if len(args) == 0 {
+		if len(s.Direct) == 0 {
+			fmt.Println("Always direct: nothing")
+		}
+		for _, e := range s.Direct {
+			fmt.Println(e)
+		}
+		return nil
+	}
+	if len(args) < 2 {
+		return errors.New(usage)
+	}
+	entries := args[1:]
+	if _, err := config.ParseDirect(entries); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "add":
+		for _, e := range entries {
+			if !slices.Contains(s.Direct, e) {
+				s.Direct = append(s.Direct, e)
+			}
+		}
+	case "remove":
+		for _, e := range entries {
+			i := slices.Index(s.Direct, e)
+			if i < 0 {
+				return fmt.Errorf("%s is not in the Always direct list", e)
+			}
+			s.Direct = slices.Delete(s.Direct, i, i+1)
+		}
+	default:
+		return errors.New(usage)
+	}
+	if _, err := ipc.Call(ctx, ipc.Request{Op: ipc.OpSettings, Settings: &s}); err != nil {
+		return err
+	}
+	fmt.Printf("Always direct: %s\n", strings.Join(s.Direct, ", "))
 	return nil
 }
 
