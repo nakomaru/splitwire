@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -169,22 +170,69 @@ func replyCode(err error) byte {
 }
 
 // pipe copies between the client and the target until both directions
-// end, passing each end-of-stream on as a half close.
+// end. An end of stream passes on as a half close; an error, or a
+// direction idle for halfCloseIdle after the other has ended, ends both.
 func (p *Proxy) pipe(c net.Conn, br *bufio.Reader, target net.Conn) {
 	if !p.track(target) {
 		return
 	}
 	defer p.untrack(target)
-	var wg sync.WaitGroup
-	wg.Add(1)
+	var half atomic.Bool
+	// ended passes on src's end of stream to dst and starts the idle limit
+	// on the other direction, whose blocked read or write the new deadlines
+	// also cut short. An error ends both connections.
+	ended := func(err error, dst, src net.Conn) {
+		if err != nil {
+			c.Close()
+			target.Close()
+			return
+		}
+		closeWrite(dst)
+		half.Store(true)
+		limit := time.Now().Add(halfCloseIdle)
+		dst.SetReadDeadline(limit)
+		src.SetWriteDeadline(limit)
+	}
+	done := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		io.Copy(target, br)
-		closeWrite(target)
+		defer close(done)
+		ended(relay(target, c, br, &half), target, c)
 	}()
-	io.Copy(c, target)
-	closeWrite(c)
-	wg.Wait()
+	ended(relay(c, target, target, &half), c, target)
+	<-done
+}
+
+// halfCloseIdle is how long a connection may go without traffic once one
+// direction has ended. A client that half closes and a client that closed
+// and left look alike to the proxy, so a silent target would otherwise hold
+// the connection forever.
+var halfCloseIdle = time.Minute
+
+// relay copies r, which reads src, to dst until r ends, and returns nil at
+// its end of stream. Once half is set, each read and write must finish
+// within halfCloseIdle.
+func relay(dst, src net.Conn, r io.Reader, half *atomic.Bool) error {
+	buf := make([]byte, 32<<10)
+	for {
+		if half.Load() {
+			src.SetReadDeadline(time.Now().Add(halfCloseIdle))
+		}
+		n, err := r.Read(buf)
+		if n > 0 {
+			if half.Load() {
+				dst.SetWriteDeadline(time.Now().Add(halfCloseIdle))
+			}
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func closeWrite(c net.Conn) {

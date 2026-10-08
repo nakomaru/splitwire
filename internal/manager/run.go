@@ -233,7 +233,8 @@ func (m *manager) handle(c *ipc.Conn) {
 	}
 }
 
-// watch streams statuses to c until the client goes away.
+// watch streams statuses to c until the client goes away. The client sends
+// nothing after its watch request, so a read that ends means it left.
 func (m *manager) watch(c *ipc.Conn) {
 	ch := make(chan ipc.Status, 1)
 	m.mu.Lock()
@@ -245,11 +246,23 @@ func (m *manager) watch(c *ipc.Conn) {
 		delete(m.watchers, ch)
 		m.mu.Unlock()
 	}()
+	gone := make(chan struct{})
+	go func() {
+		defer close(gone)
+		var req ipc.Request
+		for c.Receive(&req) == nil {
+		}
+	}()
 	if err := c.Send(first); err != nil {
 		return
 	}
-	for st := range ch {
-		if err := c.Send(st); err != nil {
+	for {
+		select {
+		case st := <-ch:
+			if err := c.Send(st); err != nil {
+				return
+			}
+		case <-gone:
 			return
 		}
 	}

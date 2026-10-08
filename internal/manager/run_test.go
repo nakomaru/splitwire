@@ -1,10 +1,12 @@
 package manager
 
 import (
+	"net"
 	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"splitwire/internal/config"
 	"splitwire/internal/ipc"
@@ -88,5 +90,29 @@ func TestReadEntries(t *testing.T) {
 	// The Split VPN starts first; a VPN whose file picks apps stays a VPN.
 	if want := "games=split office=vpn proxy=proxy"; strings.Join(order, " ") != want {
 		t.Fatalf("entries %v, want %s", order, want)
+	}
+}
+
+// A watch ends when its client leaves, even while no status changes.
+func TestWatchEndsWhenClientLeaves(t *testing.T) {
+	m := &manager{watchers: make(map[chan ipc.Status]struct{})}
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.watch(ipc.NewConn(server))
+	}()
+	var st ipc.Status
+	if err := ipc.NewConn(client).Receive(&st); err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watch outlived its client")
+	}
+	if len(m.watchers) != 0 {
+		t.Fatalf("%d watchers remain", len(m.watchers))
 	}
 }

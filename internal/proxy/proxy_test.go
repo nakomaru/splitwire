@@ -25,7 +25,8 @@ import (
 )
 
 // server runs a WireGuard peer at 10.9.0.1 in user space, with an HTTP
-// server on port 80 and a UDP echo on port 7.
+// server on port 80, a UDP echo on port 7, and on port 81 a server that
+// reads everything and never answers or closes.
 func server(t *testing.T, clientPub *conf.Key) (pub *conf.Key, port int) {
 	t.Helper()
 	key, err := conf.NewPrivateKey()
@@ -61,6 +62,21 @@ func server(t *testing.T, clientPub *conf.Key) (pub *conf.Key, port int) {
 	go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "hello %s", r.URL.Path)
 	}))
+	silent, err := tnet.ListenTCPAddrPort(netip.MustParseAddrPort("10.9.0.1:81"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	go func() {
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+			go io.Copy(io.Discard, c)
+		}
+	}()
 	echo, err := tnet.ListenUDPAddrPort(netip.MustParseAddrPort("10.9.0.1:7"))
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +235,95 @@ func TestProxy(t *testing.T) {
 	peers, err := p.Peers()
 	if err != nil || len(peers) != 1 || peers[0].LastHandshake.IsZero() || peers[0].RxBytes == 0 {
 		t.Fatalf("peers %+v %v", peers, err)
+	}
+}
+
+// connectSOCKS opens a SOCKS5 CONNECT through the proxy to target.
+func connectSOCKS(t *testing.T, p *Proxy, target string) *net.TCPConn {
+	t.Helper()
+	d, err := xproxy.SOCKS5("tcp", p.Listen().String(), nil, xproxy.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := d.Dial("tcp", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.(*net.TCPConn)
+}
+
+// waitIdle fails the test unless the proxy holds no connections within d.
+func waitIdle(t *testing.T, p *Proxy, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for {
+		p.mu.Lock()
+		n := len(p.conns)
+		p.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the proxy still holds %d connections after %s", n, d)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A client that goes away ends its connection even when the target never
+// answers or closes.
+func TestClientGoneSilentTarget(t *testing.T) {
+	defer func(d time.Duration) { halfCloseIdle = d }(halfCloseIdle)
+	halfCloseIdle = 300 * time.Millisecond
+	p := start(t)
+
+	t.Run("reset", func(t *testing.T) {
+		c := connectSOCKS(t, p, "10.9.0.1:81")
+		c.Write([]byte("request"))
+		c.SetLinger(0)
+		c.Close()
+		waitIdle(t, p, 5*time.Second)
+	})
+	t.Run("close", func(t *testing.T) {
+		c := connectSOCKS(t, p, "10.9.0.1:81")
+		c.Write([]byte("request"))
+		c.Close()
+		waitIdle(t, p, 5*time.Second)
+	})
+	t.Run("half close", func(t *testing.T) {
+		c := connectSOCKS(t, p, "10.9.0.1:81")
+		defer c.Close()
+		c.Write([]byte("request"))
+		c.CloseWrite()
+		waitIdle(t, p, 5*time.Second)
+	})
+	t.Run("http request", func(t *testing.T) {
+		c, err := net.DialTimeout("tcp", p.Listen().String(), 10*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(c, "GET http://10.9.0.1:81/ HTTP/1.1\r\nHost: 10.9.0.1:81\r\n\r\n")
+		c.Close()
+		waitIdle(t, p, 5*time.Second)
+	})
+}
+
+// A half close passes through, and the answer that follows it still
+// reaches the client.
+func TestHalfCloseAnswer(t *testing.T) {
+	p := start(t)
+	c := connectSOCKS(t, p, "10.9.0.1:80")
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprintf(c, "GET /half HTTP/1.1\r\nHost: 10.9.0.1\r\n\r\n")
+	c.CloseWrite()
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "hello /half" {
+		t.Fatalf("body %q", body)
 	}
 }
 

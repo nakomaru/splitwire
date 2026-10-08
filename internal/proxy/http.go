@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -64,6 +65,12 @@ func (p *Proxy) serveHTTP(c net.Conn, br *bufio.Reader) {
 		writeStatus(c, http.StatusBadGateway)
 		return
 	}
+	// The proxy serves one request per connection, so the client's end of
+	// stream or error means it left, which abandons the response.
+	go func() {
+		io.Copy(io.Discard, br)
+		target.Close()
+	}()
 	resp, err := http.ReadResponse(bufio.NewReader(target), req)
 	if err != nil {
 		writeStatus(c, http.StatusBadGateway)
