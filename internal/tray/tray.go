@@ -244,7 +244,7 @@ func startTray(exe string, args ...string) error {
 	return exec.Command(exe, append([]string{Command}, args...)...).Start()
 }
 
-// ---- dialogs ----
+// Dialogs
 
 func infoBox(format string, args ...any) {
 	text, _ := windows.UTF16PtrFromString(fmt.Sprintf(format, args...))
@@ -275,11 +275,11 @@ func selfExe() string {
 	return self
 }
 
-// ---- setup and uninstall ----
+// Setup and uninstall
 
 func (a *app) importTunnels() { runElevated(selfExe(), "import") }
 
-// ---- start at sign-in ----
+// Start at sign-in
 
 func runAtLogin() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)

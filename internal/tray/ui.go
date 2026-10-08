@@ -1040,7 +1040,7 @@ func (f *form) accentPill(dc uintptr, r rect) {
 	fillRound(dc, pill, f.px(3), f.col.accent, f.col.accent)
 }
 
-// ---- lists ----
+// Lists
 
 func (f *form) listSet(c *control, items []string) {
 	procSendMessageW.Call(c.hwnd, wmSetRedraw, 0, 0)
@@ -1102,7 +1102,7 @@ func (f *form) listItemAt(c *control, x, y int32) int {
 
 const wmSetRedraw = 0x000B
 
-// ---- menus ----
+// Menus
 
 type menuItem struct {
 	text            string
@@ -1142,7 +1142,7 @@ func (f *form) popupUnder(c *control, items []menuItem) {
 	f.popup(items, pt.x, pt.y)
 }
 
-// ---- icons ----
+// Icons
 
 // iconCache holds program icons by path and pixel size.
 type iconCache map[string]uintptr
@@ -1178,7 +1178,7 @@ func drawIcon(dc, icon uintptr, x, y, size int32) {
 	procDrawIconEx.Call(dc, uintptr(x), uintptr(y), icon, uintptr(size), uintptr(size), 0, 0, diNormal)
 }
 
-// ---- messages ----
+// Messages
 
 // runForms dispatches messages for the thread's forms until quit returns
 // true or the thread's last form posts WM_QUIT.

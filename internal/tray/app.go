@@ -113,7 +113,7 @@ func (a *app) ready() {
 	}
 }
 
-// ---- manager connection ----
+// Manager connection
 
 func (a *app) setLink(link int, err string) {
 	a.mu.Lock()
@@ -218,7 +218,7 @@ func call(req ipc.Request) (*ipc.Reply, error) {
 	return c.Call(req)
 }
 
-// ---- tunnel files ----
+// Tunnel files
 
 func loadTunnel(name string) (text string, c *config.Config, err error) {
 	path, err := userconf.Resolve(name)
@@ -278,7 +278,7 @@ func (a *app) watchFolder() {
 	}
 }
 
-// ---- actions ----
+// Actions
 
 // run brings the tunnel up as the Split VPN, a VPN or a proxy. A tunnel
 // without a Proxy address gets one written to its file first.

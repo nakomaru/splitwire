@@ -273,7 +273,7 @@ func newWindow(a *app) *window {
 	return w
 }
 
-// ---- layout ----
+// Layout
 
 func clamp(v, lo, hi int32) int32 {
 	if v < lo {
@@ -412,7 +412,7 @@ func (w *window) relayout() {
 	}
 }
 
-// ---- state ----
+// State
 
 func (w *window) tunnel() *ipc.Tunnel {
 	if w.snap.link != linkConnected {
@@ -766,7 +766,7 @@ func (w *window) showTab(i int) {
 	w.showOverview(w.sel == "")
 }
 
-// ---- input ----
+// Input
 
 func (w *window) command(c *control, code uint16) {
 	switch c {
