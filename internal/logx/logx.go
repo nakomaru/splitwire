@@ -47,14 +47,14 @@ func (w *writer) WriteWithTimestamp(p []byte, ts int64) (int, error) {
 }
 
 // Setup sends the standard logger to stderr, to extra writers and, when path
-// is not empty, to that file as well.
+// is not empty, to that file as well. The file keeps up to MaxFileSize
+// bytes, and the lines before them in path.1.
 func Setup(path string, extra ...io.Writer) (io.Closer, error) {
 	w := &writer{out: append([]io.Writer{os.Stderr}, extra...)}
-	var f *os.File
+	var f *File
 	if path != "" {
 		var err error
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
+		if f, err = OpenFile(path, MaxFileSize); err != nil {
 			return nil, err
 		}
 		w.out = append(w.out, f)
@@ -70,6 +70,81 @@ func Setup(path string, extra ...io.Writer) (io.Closer, error) {
 type nopCloser struct{}
 
 func (nopCloser) Close() error { return nil }
+
+// MaxFileSize is the size at which a log file moves aside to path.1.
+const MaxFileSize = 4 << 20
+
+// File appends to a log file that moves aside to path.1, replacing the one
+// there, once it reaches its limit.
+type File struct {
+	mu    sync.Mutex
+	path  string
+	limit int64
+	f     *os.File
+	size  int64
+}
+
+// OpenFile opens or creates the log file at path.
+func OpenFile(path string, limit int64) (*File, error) {
+	l := &File{path: path, limit: limit}
+	if err := l.open(); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+func (l *File) open() error {
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return err
+	}
+	l.f, l.size = f, st.Size()
+	return nil
+}
+
+// Write appends p, first moving a full file aside. A write after Close
+// is dropped.
+func (l *File) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return 0, os.ErrClosed
+	}
+	if l.size > 0 && l.size+int64(len(p)) > l.limit {
+		// Windows renames only closed files.
+		l.f.Close()
+		l.f = nil
+		moved := os.Rename(l.path, l.path+".1") == nil
+		if err := l.open(); err != nil {
+			return 0, err
+		}
+		if !moved {
+			// Another process holds the file; the next try waits for
+			// another limit's worth of lines.
+			l.size = 0
+		}
+	}
+	n, err := l.f.Write(p)
+	l.size += int64(n)
+	return n, err
+}
+
+// Close closes the file.
+func (l *File) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
+}
 
 // Ring keeps the most recent log lines in memory.
 type Ring struct {
