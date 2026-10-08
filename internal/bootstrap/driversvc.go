@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"splitwire/internal/stdriver"
+	"splitwire/internal/svcwait"
 )
 
 // MullvadDaemonService is the Mullvad app's daemon, which claims the driver.
@@ -156,20 +157,14 @@ func stopService(s *mgr.Service) error {
 }
 
 func waitState(s *mgr.Service, want svc.State) error {
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		st, err := s.Query()
-		if err != nil {
-			return fmt.Errorf("query %s: %w", s.Name, err)
-		}
-		if st.State == want {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not reach state %d within 30 seconds (state %d)", s.Name, want, st.State)
-		}
-		time.Sleep(100 * time.Millisecond)
+	st, err := svcwait.WaitState(s.Name, uint32(want), 30*time.Second)
+	if errors.Is(err, svcwait.ErrTimeout) {
+		return fmt.Errorf("%s did not reach state %d within 30 seconds (state %d)", s.Name, want, st.CurrentState)
 	}
+	if err != nil {
+		return fmt.Errorf("wait for %s: %w", s.Name, err)
+	}
+	return nil
 }
 
 // RemoveDriverService stops and deletes the driver service when it points at

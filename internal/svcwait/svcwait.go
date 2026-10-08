@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -84,6 +85,70 @@ func Until(name string, done func(state, pid uint32) bool) error {
 		windows.CloseServiceHandle(h)
 		if !errors.Is(err, windows.ERROR_SERVICE_MARKED_FOR_DELETE) {
 			return err
+		}
+	}
+}
+
+// ErrTimeout reports that a service did not reach a state in time.
+var ErrTimeout = errors.New("timed out")
+
+// WaitState blocks until the named service reaches state, a SERVICE_*
+// state, or timeout passes, and returns the last status it read.
+func WaitState(name string, state uint32, timeout time.Duration) (windows.SERVICE_STATUS_PROCESS, error) {
+	var st windows.SERVICE_STATUS_PROCESS
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return st, fmt.Errorf("connect to service manager: %w", err)
+	}
+	defer windows.CloseServiceHandle(scm)
+	name16, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return st, err
+	}
+	h, err := windows.OpenService(scm, name16, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return st, err
+	}
+	n := new(windows.SERVICE_NOTIFY)
+	defer func() {
+		// Closing h cancels a notification still pending, and the alertable
+		// sleep runs one already queued, so none reaches the thread once
+		// it unlocks.
+		windows.CloseServiceHandle(h)
+		windows.SleepEx(0, true)
+		runtime.KeepAlive(n)
+	}()
+	deadline := time.Now().Add(timeout)
+	registered := false
+	for {
+		var needed uint32
+		err := windows.QueryServiceStatusEx(h, windows.SC_STATUS_PROCESS_INFO,
+			(*byte)(unsafe.Pointer(&st)), uint32(unsafe.Sizeof(st)), &needed)
+		if err != nil {
+			return st, err
+		}
+		if st.CurrentState == state {
+			return st, nil
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return st, ErrTimeout
+		}
+		if !registered {
+			*n = windows.SERVICE_NOTIFY{Version: windows.SERVICE_NOTIFY_STATUS_CHANGE, NotifyCallback: notifyCallback}
+			if err := windows.NotifyServiceStatusChange(h, anyState, n); err != nil {
+				return st, err
+			}
+			registered = true
+		}
+		if windows.SleepEx(uint32(left/time.Millisecond)+1, true) == waitIOCompletion {
+			registered = false
+			if n.NotificationStatus != 0 {
+				return st, windows.Errno(n.NotificationStatus)
+			}
 		}
 	}
 }

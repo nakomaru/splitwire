@@ -27,6 +27,7 @@ import (
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/config"
+	"splitwire/internal/svcwait"
 	"splitwire/internal/userconf"
 )
 
@@ -209,27 +210,21 @@ func runHelper(outDir string, names []string) error {
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("start %s service: %w", helperService, err)
 	}
-	deadline := time.Now().Add(time.Minute)
-	for {
-		st, err := s.Query()
-		if err != nil {
-			return err
-		}
-		if st.State == svc.Stopped {
-			if st.ServiceSpecificExitCode != 0 {
-				detail, _ := os.ReadFile(filepath.Join(outDir, errorsFile))
-				return fmt.Errorf("could not decrypt %d tunnel(s): %s", st.ServiceSpecificExitCode, strings.TrimSpace(string(detail)))
-			}
-			if st.Win32ExitCode != 0 && st.Win32ExitCode != uint32(windows.ERROR_SERVICE_SPECIFIC_ERROR) {
-				return fmt.Errorf("%s service failed: %w", helperService, windows.Errno(st.Win32ExitCode))
-			}
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s service did not finish within a minute", helperService)
-		}
-		time.Sleep(100 * time.Millisecond)
+	st, err := svcwait.WaitState(helperService, windows.SERVICE_STOPPED, time.Minute)
+	if errors.Is(err, svcwait.ErrTimeout) {
+		return fmt.Errorf("%s service did not finish within a minute", helperService)
 	}
+	if err != nil {
+		return err
+	}
+	if st.ServiceSpecificExitCode != 0 {
+		detail, _ := os.ReadFile(filepath.Join(outDir, errorsFile))
+		return fmt.Errorf("could not decrypt %d tunnel(s): %s", st.ServiceSpecificExitCode, strings.TrimSpace(string(detail)))
+	}
+	if st.Win32ExitCode != 0 && st.Win32ExitCode != uint32(windows.ERROR_SERVICE_SPECIFIC_ERROR) {
+		return fmt.Errorf("%s service failed: %w", helperService, windows.Errno(st.Win32ExitCode))
+	}
+	return nil
 }
 
 type helper struct {

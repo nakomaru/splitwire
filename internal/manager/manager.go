@@ -17,6 +17,7 @@ import (
 
 	"splitwire/internal/bootstrap"
 	"splitwire/internal/ipc"
+	"splitwire/internal/svcwait"
 )
 
 // ServiceName is the manager service.
@@ -149,24 +150,18 @@ func Install(opts Options) error {
 }
 
 func stopService(s *mgr.Service) error {
-	st, err := s.Control(svc.Stop)
+	_, err := s.Control(svc.Stop)
 	if errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("stop %s: %w", s.Name, err)
 	}
-	deadline := time.Now().Add(time.Minute)
-	for st.State != svc.Stopped {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not stop within a minute", s.Name)
-		}
-		time.Sleep(100 * time.Millisecond)
-		if st, err = s.Query(); err != nil {
-			return err
-		}
+	_, err = svcwait.WaitState(s.Name, windows.SERVICE_STOPPED, time.Minute)
+	if errors.Is(err, svcwait.ErrTimeout) {
+		return fmt.Errorf("%s did not stop within a minute", s.Name)
 	}
-	return nil
+	return err
 }
 
 // Uninstall stops and deletes the manager service.
