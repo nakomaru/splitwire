@@ -231,24 +231,3 @@ func replaceFile(dst string, b []byte) error {
 	}
 	return os.Rename(tmp, dst)
 }
-
-// asidePath deletes the copies of dst that earlier replacements moved aside
-// and that no process runs anymore, and returns a free name to move dst to.
-// Windows renames a running executable but neither deletes nor replaces it,
-// so a copy still running keeps its name and dst takes the next one.
-func asidePath(dst string) string {
-	dir, base := filepath.Split(dst)
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), base+".old") {
-			os.Remove(filepath.Join(dir, e.Name()))
-		}
-	}
-	aside := dst + ".old"
-	for i := 1; ; i++ {
-		if _, err := os.Lstat(aside); os.IsNotExist(err) {
-			return aside
-		}
-		aside = fmt.Sprintf("%s.old%d", dst, i)
-	}
-}

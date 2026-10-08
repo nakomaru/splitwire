@@ -109,6 +109,11 @@ func (s *service) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<-
 	m.ln = ln
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	log.Printf("Manager started")
+	go func() {
+		if err := bootstrap.DeleteAside(); err != nil {
+			log.Printf("Delete the replaced executables: %v", err)
+		}
+	}()
 
 	entries, boot := m.loadBoot()
 	m.status.Boot = boot

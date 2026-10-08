@@ -88,6 +88,11 @@ func Run(args []string) error {
 	}
 	a := newApp()
 	a.openAtStart = !background
+	if samePath(self, installed) {
+		if id, err := fileIdentity(installed); err == nil {
+			a.image = &id
+		}
+	}
 	if quit, err := createEvent(quitEvent); err == nil {
 		defer windows.CloseHandle(quit)
 		go func() {
@@ -132,6 +137,27 @@ func deleteSetup(path string, pid uint32, installed string) {
 }
 
 func installedExe() (string, error) { return bootstrap.ExePath() }
+
+// fileID identifies a file, which keeps its identity when renamed.
+type fileID struct{ volume, high, low uint32 }
+
+func fileIdentity(path string) (fileID, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return fileID{}, err
+	}
+	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return fileID{}, err
+	}
+	defer windows.CloseHandle(h)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		return fileID{}, err
+	}
+	return fileID{info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow}, nil
+}
 
 func samePath(a, b string) bool {
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))

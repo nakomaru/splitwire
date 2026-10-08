@@ -63,6 +63,9 @@ type app struct {
 	// next starts with nextArgs once the menu loop ends.
 	next     string
 	nextArgs []string
+	// image identifies the installed executable this copy runs, or is nil
+	// when it runs another.
+	image *fileID
 
 	menus       map[string]*tunnelMenu
 	summaryMI   *systray.MenuItem
@@ -127,6 +130,32 @@ func (a *app) setStatus(st ipc.Status) {
 	a.mu.Unlock()
 }
 
+// restartIfReplaced restarts the app into the installed executable when an
+// install has replaced the one it runs, which otherwise keeps running from
+// the copy moved aside and keeps that copy from being deleted. The window
+// stays open when it is. It reports whether the app is restarting.
+func (a *app) restartIfReplaced() bool {
+	if a.image == nil {
+		return false
+	}
+	installed, err := installedExe()
+	if err != nil {
+		return false
+	}
+	if id, err := fileIdentity(installed); err != nil || id == *a.image {
+		return false
+	}
+	a.mu.Lock()
+	open := a.win != 0
+	a.mu.Unlock()
+	a.next, a.nextArgs = installed, nil
+	if !open {
+		a.nextArgs = []string{backgroundFlag}
+	}
+	systray.Quit()
+	return true
+}
+
 // watchManager keeps a watch stream open to the manager, reconnecting when
 // the service restarts.
 func (a *app) watchManager() {
@@ -145,6 +174,9 @@ func (a *app) watchManager() {
 			<-a.retry
 			pid = 0
 			continue
+		}
+		if a.restartIfReplaced() {
+			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		conn, err := ipc.Dial(ctx)
